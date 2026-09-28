@@ -85,6 +85,15 @@ class Worker {
             while(!signaled(stop_.get())){
                 const auto snapshot=session_->snapshot();const auto key=streamKey(snapshot);
                 if(!active(snapshot,fps)){
+                    if(encoder){
+                        const HRESULT failure=session_->failure.load(),transport=session_->transportFailure.load();
+                        char detail[256]{};
+                        _snprintf_s(detail,sizeof(detail),_TRUNCATE,
+                            "Monitor video paused gen=%u usb=%u enabled=%u consumer=%u fps=%u worker_fps=%u encoder_hr=0x%08lx transport_hr=0x%08lx",
+                            snapshot.current.generation,snapshot.usb?1u:0u,snapshot.current.enabled?1u:0u,snapshot.current.consumer?1u:0u,
+                            snapshot.current.fps,fps,static_cast<unsigned long>(failure),static_cast<unsigned long>(transport));
+                        monitorEvent(detail,FAILED(transport)?transport:failure);
+                    }
                     pictures_.pause();encoder.reset();current=DesktopPicture{};applied={};
                 }else if(microseconds()>=retryAt)try{
                     if(!encoder||applied!=key){
@@ -124,7 +133,9 @@ class Worker {
                         }
                     }
                 }catch(const TransportFailure& e){
-                    if(!signaled(stop_.get())){session_->failedTransport(snapshot.usb,e.code);monitorEvent(e.what(),e.code);}
+                    const bool stopping=signaled(stop_.get());
+                    if(!stopping)session_->failedTransport(snapshot.usb,e.code);
+                    if(!stopping||e.code!=HRESULT_FROM_WIN32(ERROR_CANCELLED))monitorEvent(e.what(),e.code);
                     pictures_.pause();encoder.reset();applied={};current=DesktopPicture{};
                 }catch(const Failure& e){
                     if(!signaled(stop_.get())){
@@ -517,7 +528,7 @@ NTSTATUS S7DeviceAdd(WDFDRIVER,PWDFDEVICE_INIT init){
     try{s7::WdfObjectGet_DeviceContext(device)->device=new s7::Device(device);}catch(...){return STATUS_INSUFFICIENT_RESOURCES;}return STATUS_SUCCESS;
 }
 NTSTATUS S7D0Entry(WDFDEVICE d,WDF_POWER_DEVICE_STATE){try{return s7::WdfObjectGet_DeviceContext(d)->device->start();}catch(...){return STATUS_INSUFFICIENT_RESOURCES;}}
-NTSTATUS S7D0Exit(WDFDEVICE d,WDF_POWER_DEVICE_STATE){s7::WdfObjectGet_DeviceContext(d)->device->stop();return STATUS_SUCCESS;}
+NTSTATUS S7D0Exit(WDFDEVICE d,WDF_POWER_DEVICE_STATE){s7::monitorEvent("S7 monitor device D0 exit");s7::WdfObjectGet_DeviceContext(d)->device->stop();return STATUS_SUCCESS;}
 NTSTATUS S7AdapterFinished(IDDCX_ADAPTER adapter,const IDARG_IN_ADAPTER_INIT_FINISHED* in){try{s7::WdfObjectGet_AdapterContext(adapter)->device->finish(in->AdapterInitStatus);return STATUS_SUCCESS;}catch(...){return STATUS_INSUFFICIENT_RESOURCES;}}
 NTSTATUS S7CommitModes(IDDCX_ADAPTER,const IDARG_IN_COMMITMODES*){return STATUS_SUCCESS;}
 NTSTATUS S7ParseDescription(const IDARG_IN_PARSEMONITORDESCRIPTION* in,IDARG_OUT_PARSEMONITORDESCRIPTION* out){
@@ -549,4 +560,4 @@ NTSTATUS S7Assign(IDDCX_MONITOR monitor,const IDARG_IN_SETSWAPCHAIN* in){
     catch(...){s7::WdfObjectGet_MonitorContext(monitor)->monitor->session->failure=E_OUTOFMEMORY;}
     WdfObjectDelete(in->hSwapChain);return STATUS_SUCCESS;
 }
-NTSTATUS S7Unassign(IDDCX_MONITOR monitor){s7::WdfObjectGet_MonitorContext(monitor)->monitor->stop();return STATUS_SUCCESS;}
+NTSTATUS S7Unassign(IDDCX_MONITOR monitor){s7::monitorEvent("S7 monitor swapchain unassigned");s7::WdfObjectGet_MonitorContext(monitor)->monitor->stop();return STATUS_SUCCESS;}

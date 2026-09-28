@@ -128,24 +128,41 @@ void Usb::status(const Config& c,uint32_t state,HRESULT error,HANDLE cancel){
 }
 void Usb::send(const Config& c,const Bytes& frame,uint64_t pts,bool idr,HANDLE cancel){
     std::lock_guard<std::mutex> lock(writeMutex_);
-    auto header=frameHeader(c,frame.size(),++sequence,pts,idr);Bytes packet(header.begin(),header.end());packet.insert(packet.end(),frame.begin(),frame.end());
-    const TransferBudget budget(microseconds());
-    size_t offset=0;
-    while(offset<packet.size()){
-        if(cancel&&WaitForSingleObject(cancel,0)==WAIT_OBJECT_0){
-            state_->poison();throw TransportFailure(HRESULT_FROM_WIN32(ERROR_CANCELLED),"Monitor stopped during framed transfer");
+    const auto frameSequence=++sequence;
+    auto header=frameHeader(c,frame.size(),frameSequence,pts,idr);Bytes packet(header.begin(),header.end());packet.insert(packet.end(),frame.begin(),frame.end());
+    const auto started=microseconds();
+    const TransferBudget budget(started);
+    size_t offset=0,chunkBytes=0;
+    uint64_t chunkStarted=0;
+    try{
+        while(offset<packet.size()){
+            if(cancel&&WaitForSingleObject(cancel,0)==WAIT_OBJECT_0){
+                state_->poison();throw TransportFailure(HRESULT_FROM_WIN32(ERROR_CANCELLED),"Monitor stopped during framed transfer");
+            }
+            if(!budget.remainingMS(microseconds())){
+                state_->poison();throw TransportFailure(HRESULT_FROM_WIN32(ERROR_TIMEOUT),"Whole monitor frame exceeded 75ms; reconnect required");
+            }
+            ULONG size=ULONG((std::min)(packet.size()-offset,size_t(16384)));
+            chunkBytes=size;chunkStarted=microseconds();
+            auto operation=std::make_shared<UsbOperation>(size);std::copy_n(packet.data()+offset,size,operation->bytes.data());
+            state_->begin(1,operation);
+            ULONG n=complete(WinUsb_WritePipe(state_->usb,pipe_,operation->bytes.data(),size,nullptr,&operation->overlapped),operation,1,cancel,&budget);
+            if(n!=size){offset+=n;state_->poison();throw TransportFailure(E_FAIL,"Short USB frame write; reconnect required");}
+            offset+=n;chunkBytes=0;chunkStarted=0;
         }
         if(!budget.remainingMS(microseconds())){
-            state_->poison();throw TransportFailure(HRESULT_FROM_WIN32(ERROR_TIMEOUT),"Whole monitor frame exceeded 75ms; reconnect required");
+            state_->poison();throw TransportFailure(HRESULT_FROM_WIN32(ERROR_TIMEOUT),"Monitor frame completed after its deadline");
         }
-        ULONG size=ULONG((std::min)(packet.size()-offset,size_t(16384)));
-        auto operation=std::make_shared<UsbOperation>(size);std::copy_n(packet.data()+offset,size,operation->bytes.data());
-        state_->begin(1,operation);
-        ULONG n=complete(WinUsb_WritePipe(state_->usb,pipe_,operation->bytes.data(),size,nullptr,&operation->overlapped),operation,1,cancel,&budget);
-        if(n!=size){state_->poison();throw TransportFailure(E_FAIL,"Short USB frame write; reconnect required");}offset+=n;
-    }
-    if(!budget.remainingMS(microseconds())){
-        state_->poison();throw TransportFailure(HRESULT_FROM_WIN32(ERROR_TIMEOUT),"Monitor frame completed after its deadline");
+    }catch(const TransportFailure& e){
+        const auto now=microseconds();
+        const DWORD win32=HRESULT_FACILITY(e.code)==FACILITY_WIN32?HRESULT_CODE(e.code):0;
+        char detail[512]{};
+        _snprintf_s(detail,sizeof(detail),_TRUNCATE,
+            "Monitor USB frame failed gen=%u seq=%llu payload=%zu wire=%zu confirmed=%zu chunk_requested=%zu elapsed_us=%llu chunk_us=%llu hr=0x%08lx win32=%lu cause=%s",
+            c.generation,static_cast<unsigned long long>(frameSequence),frame.size(),packet.size(),offset,chunkBytes,
+            static_cast<unsigned long long>(now-started),static_cast<unsigned long long>(chunkStarted?now-chunkStarted:0),
+            static_cast<unsigned long>(e.code),static_cast<unsigned long>(win32),e.what());
+        throw TransportFailure(e.code,detail);
     }
 }
 std::shared_ptr<Usb> Usb::discover(){
