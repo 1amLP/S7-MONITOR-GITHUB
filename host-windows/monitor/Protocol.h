@@ -41,7 +41,9 @@ inline std::array<uint8_t,FrameHeaderBytes> frameHeader(const Config& c,size_t b
 }
 // Converts one complete encoder sample. Transport fragmentation is a separate layer.
 class AnnexB {
+    enum class Framing {Unknown,AnnexB,Avcc};
     Bytes sps_,pps_;
+    Framing framing_=Framing::Unknown,preferred_=Framing::Unknown;
     static void append(Bytes& out,const uint8_t* p,size_t n){
         if(!n||(p[0]&0x80)||(p[0]&31)==0||(p[0]&31)>=24)throw std::runtime_error("Invalid H.264 NAL header");
         if(n>MaxAccessUnit||out.size()+4+n>MaxAccessUnit)throw std::runtime_error("H.264 access unit exceeds 1 MiB");
@@ -52,25 +54,48 @@ class AnnexB {
         if(i+4<=n&&p[i]==0&&p[i+1]==0&&p[i+2]==0&&p[i+3]==1)return 4;
         return 0;
     }
-    static Bytes normalize(const uint8_t* p,size_t n){
-        if(!p||n<4||n>MaxAccessUnit)throw std::runtime_error("H.264 sample size invalid");
+    static Bytes fromAnnexB(const uint8_t* p,size_t n){
+        if(!start(p,n,0))throw std::runtime_error("Missing Annex B start code");
         Bytes out;
-        if(start(p,n,0)){
-            size_t i=0;
-            while(i<n){
-                size_t len=start(p,n,i);if(!len)throw std::runtime_error("Invalid Annex B boundary");
-                size_t begin=i+len,j=begin;while(j<n&&!start(p,n,j))j++;
-                size_t end=j;while(end>begin&&p[end-1]==0)end--;append(out,p+begin,end-begin);i=j;
-            }
-        }else{
-            size_t i=0;while(i<n){
-                if(n-i<4)throw std::runtime_error("Truncated AVC length");
-                uint32_t len=(uint32_t(p[i])<<24)|(uint32_t(p[i+1])<<16)|(uint32_t(p[i+2])<<8)|p[i+3];i+=4;
-                if(!len||len>n-i)throw std::runtime_error("Invalid AVC length");
-                append(out,p+i,len);i+=len;
-            }
+        size_t i=0;
+        while(i<n){
+            size_t len=start(p,n,i);if(!len)throw std::runtime_error("Invalid Annex B boundary");
+            size_t begin=i+len,j=begin;while(j<n&&!start(p,n,j))j++;
+            size_t end=j;while(end>begin&&p[end-1]==0)end--;append(out,p+begin,end-begin);i=j;
         }
         return out;
+    }
+    static Bytes fromAvcc(const uint8_t* p,size_t n){
+        Bytes out;
+        size_t i=0;
+        while(i<n){
+            if(n-i<4)throw std::runtime_error("Truncated AVC length");
+            uint32_t len=(uint32_t(p[i])<<24)|(uint32_t(p[i+1])<<16)|(uint32_t(p[i+2])<<8)|p[i+3];i+=4;
+            if(!len||len>n-i)throw std::runtime_error("Invalid AVC length");
+            append(out,p+i,len);i+=len;
+        }
+        return out;
+    }
+    static bool tryParse(Bytes& out,const uint8_t* p,size_t n,Framing format){
+        try{out=format==Framing::Avcc?fromAvcc(p,n):fromAnnexB(p,n);return true;}
+        catch(const std::runtime_error&){return false;}
+    }
+    Bytes normalize(const uint8_t* p,size_t n){
+        if(!p||n<4||n>MaxAccessUnit)throw std::runtime_error("H.264 sample size invalid");
+        if(!start(p,n,0)){Bytes out=fromAvcc(p,n);framing_=Framing::Avcc;return out;}
+        // An AVCC length can begin with an Annex B start code. Check both complete parses.
+        Bytes avcc,annex;
+        const bool avccValid=tryParse(avcc,p,n,Framing::Avcc);
+        const bool annexValid=tryParse(annex,p,n,Framing::AnnexB);
+        if(avccValid&&annexValid){
+            if(avcc==annex)return avcc;
+            if(framing_==Framing::Unknown)framing_=preferred_;
+            if(framing_==Framing::Unknown)throw std::runtime_error("Ambiguous H.264 sample framing");
+            return framing_==Framing::Avcc?avcc:annex;
+        }
+        if(avccValid){framing_=Framing::Avcc;return avcc;}
+        if(annexValid){framing_=Framing::AnnexB;return annex;}
+        throw std::runtime_error("Invalid H.264 sample framing");
     }
     void remember(const Bytes& b){
         for(size_t i=0;i<b.size();){
@@ -82,6 +107,7 @@ class AnnexB {
         }
     }
 public:
+    void reset(){sps_.clear();pps_.clear();framing_=preferred_=Framing::Unknown;}
     void config(const uint8_t* p,size_t n){
         if(!p||!n)return;
         if(p[0]==1){
@@ -97,7 +123,12 @@ public:
                 }
             }
             remember(b);
-        }else remember(normalize(p,n));
+            framing_=Framing::Unknown;preferred_=Framing::Avcc;
+        }else{
+            if(n<4||n>MaxAccessUnit)throw std::runtime_error("H.264 configuration size invalid");
+            remember(fromAnnexB(p,n));
+            framing_=preferred_=Framing::Unknown;
+        }
     }
     Bytes sample(const uint8_t* p,size_t n,bool& idr){
         Bytes b=normalize(p,n);remember(b);idr=false;bool slice=false,hasSPS=false,hasPPS=false;

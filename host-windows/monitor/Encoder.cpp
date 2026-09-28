@@ -92,6 +92,7 @@ void Encoder::open(IMFActivate* activation){
     check(transform_->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM,0),"Start encoder stream");header();
 }
 void Encoder::header(){
+    annex_.reset();
     ComPtr<IMFMediaType> type;check(transform_->GetOutputCurrentType(output_,&type),"Current H.264 output type");UINT32 size=0;
     HRESULT hr=type->GetBlobSize(MF_MT_MPEG_SEQUENCE_HEADER,&size);if(hr==MF_E_ATTRIBUTENOTFOUND)return;check(hr,"AVC sequence header size");
     if(size==0)return;if(size>MaxAccessUnit)throw Failure(E_INVALIDARG,"AVC sequence header too large");
