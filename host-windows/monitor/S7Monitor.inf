@@ -1,0 +1,51 @@
+; S7M1 hardware H.264 monitor. Desktop UMDF/IddCx driver, x64 only.
+; A signed package is REQUIRED. This INF never replaces UVC, audio, HID or ADB.
+[Version]
+Signature="$Windows NT$"
+Class=Display
+ClassGuid={4D36E968-E325-11CE-BFC1-08002BE10318}
+ClassVer=2.0
+Provider=%Provider%
+DriverVer=09/27/2026,0.3.25.0
+CatalogFile=S7Monitor.cat
+PnpLockdown=1
+
+[Manufacturer]
+%Provider%=Models,NTamd64.10.0...19041
+[Models.NTamd64.10.0...19041]
+%DeviceName%=Install,Root\S7H264Monitor
+
+[Install.NT]
+Include=WUDFRD.inf
+Needs=WUDFRD.NT
+CopyFiles=DriverCopy
+[Install.NT.HW]
+Include=WUDFRD.inf
+Needs=WUDFRD.NT.HW
+AddReg=HardwareSettings
+[HardwareSettings]
+HKR,,UpperFilters,0x00010000,"IndirectKmd"
+HKR,"WUDF","DeviceGroupId",0x00000000,"S7H264Monitor-7cab3351"
+[Install.NT.Services]
+Include=WUDFRD.inf
+Needs=WUDFRD.NT.Services
+[Install.NT.Wdf]
+UmdfService=S7Monitor,DriverService
+UmdfServiceOrder=S7Monitor
+UmdfKernelModeClientPolicy=AllowKernelModeClients
+[DriverService]
+UmdfLibraryVersion=$UMDFVERSION$
+ServiceBinary=%13%\S7Monitor.dll
+UmdfExtensions=IddCx0102
+[DestinationDirs]
+DriverCopy=13
+[DriverCopy]
+S7Monitor.dll
+[SourceDisksNames]
+1=%DiskName%
+[SourceDisksFiles]
+S7Monitor.dll=1
+[Strings]
+Provider="S7 Appliance Project"
+DeviceName="S7 H.264 Indirect Display"
+DiskName="S7 H.264 Monitor Driver"

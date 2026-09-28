@@ -1,0 +1,5 @@
+PeriMode retains GPL-3.0 attribution for code derived from
+https://github.com/twsnmp/go-zerokvm and the supplied S7 Monitor sources.
+The Go module path is perimode/native. The original upstream repository and
+its full history are not bundled with this source-only release.
+See ../LICENSE and ../docs/PROVENANCE.md.

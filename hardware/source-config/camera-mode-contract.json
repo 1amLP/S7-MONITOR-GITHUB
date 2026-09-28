@@ -1,0 +1,127 @@
+{
+  "schema": "S7_CAMERA_MODE_CONTRACT_2",
+  "selection_version": 2,
+  "settings_schema": 10,
+  "modes": [
+    {
+      "sensor": 0,
+      "mode": {
+        "width": 2560,
+        "height": 1440,
+        "fps": 30
+      },
+      "selection_bit": 1,
+      "webcam_release_eligible": true,
+      "native_profile_required": true,
+      "hardware_tested": false
+    },
+    {
+      "sensor": 0,
+      "mode": {
+        "width": 1920,
+        "height": 1080,
+        "fps": 60
+      },
+      "selection_bit": 2,
+      "webcam_release_eligible": true,
+      "native_profile_required": true,
+      "hardware_tested": false
+    },
+    {
+      "sensor": 0,
+      "mode": {
+        "width": 1920,
+        "height": 1080,
+        "fps": 30
+      },
+      "selection_bit": 4,
+      "webcam_release_eligible": true,
+      "native_profile_required": true,
+      "hardware_tested": false
+    },
+    {
+      "sensor": 0,
+      "mode": {
+        "width": 1280,
+        "height": 720,
+        "fps": 240
+      },
+      "selection_bit": 8,
+      "webcam_release_eligible": false,
+      "native_profile_required": true,
+      "hardware_tested": false
+    },
+    {
+      "sensor": 0,
+      "mode": {
+        "width": 1280,
+        "height": 720,
+        "fps": 120
+      },
+      "selection_bit": 16,
+      "webcam_release_eligible": false,
+      "native_profile_required": true,
+      "hardware_tested": false
+    },
+    {
+      "sensor": 0,
+      "mode": {
+        "width": 1280,
+        "height": 720,
+        "fps": 60
+      },
+      "selection_bit": 32,
+      "webcam_release_eligible": true,
+      "native_profile_required": true,
+      "hardware_tested": false
+    },
+    {
+      "sensor": 0,
+      "mode": {
+        "width": 1280,
+        "height": 720,
+        "fps": 30
+      },
+      "selection_bit": 64,
+      "webcam_release_eligible": true,
+      "native_profile_required": true,
+      "hardware_tested": false
+    },
+    {
+      "sensor": 1,
+      "mode": {
+        "width": 2560,
+        "height": 1440,
+        "fps": 30
+      },
+      "selection_bit": 1,
+      "webcam_release_eligible": true,
+      "native_profile_required": true,
+      "hardware_tested": false
+    },
+    {
+      "sensor": 1,
+      "mode": {
+        "width": 1920,
+        "height": 1080,
+        "fps": 30
+      },
+      "selection_bit": 2,
+      "webcam_release_eligible": true,
+      "native_profile_required": true,
+      "hardware_tested": false
+    },
+    {
+      "sensor": 1,
+      "mode": {
+        "width": 1280,
+        "height": 720,
+        "fps": 30
+      },
+      "selection_bit": 4,
+      "webcam_release_eligible": true,
+      "native_profile_required": true,
+      "hardware_tested": false
+    }
+  ]
+}

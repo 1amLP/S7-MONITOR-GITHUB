@@ -1,0 +1,23 @@
+{
+  "schema": "S7_WINDOWS_TOOLCHAIN_1",
+  "package_version": "10.0.26100.6584",
+  "kit_version": "10.0.26100.0",
+  "feed": "https://api.nuget.org/v3-flatcontainer/",
+  "msvc_major_minor": "14.44",
+  "minimum_umdf": "2.25",
+  "minimum_iddcx": "1.4",
+  "packages": {
+    "sdk_common": "Microsoft.Windows.SDK.CPP",
+    "sdk_x64": "Microsoft.Windows.SDK.CPP.x64",
+    "sdk_arm64": "Microsoft.Windows.SDK.CPP.arm64",
+    "wdk_x64": "Microsoft.Windows.WDK.x64",
+    "wdk_arm64": "Microsoft.Windows.WDK.ARM64"
+  },
+  "notes": [
+    "Developer build inputs only; never installed as S7 runtime software.",
+    "Matching SDK/WDK build 26100; packages verified with dotnet nuget verify before extraction.",
+    "Compiler comes from an existing VS2022 C++ installation. No Visual Studio installer, driver, certificate, registry or boot changes.",
+    "x64 build host, x64 and ARM64 targets. ARM64 target tests are compiled but not executed on x64.",
+    "Modern MFVirtualCamera backend needs build22000+. Separate camera-legacy target uses Frame Server Custom Media Source min19041; actual Win10/ARM64 runtime, WDK validation and certified installation remain unverified."
+  ]
+}

@@ -1,0 +1,4 @@
+LIBRARY S7Camera
+EXPORTS
+    DllGetClassObject PRIVATE
+    DllCanUnloadNow PRIVATE
