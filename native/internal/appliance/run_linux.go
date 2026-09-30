@@ -1800,9 +1800,11 @@ func (u *UI) decode(ctx context.Context) {
 		if d != nil {
 			drain := d.Drain
 			latest := false
+			// The bounded presenter owns frame replacement and age limits. Keep
+			// fresh decode bursts intact instead of discarding them twice.
 			if optimized, ok := d.(interface {
 				DrainLatest(func(media.Image) error) (int, error)
-			}); ok {
+			}); ok && u.presentFrames == nil {
 				drain = optimized.DrainLatest
 				latest = true
 			}
