@@ -6,14 +6,17 @@
 #include <string_view>
 
 namespace s7 {
+// Windows samples the virtual desktop faster than the 60 FPS USB stream.
+constexpr uint32_t MonitorCaptureFPS=120;
 struct MonitorTiming {
     uint32_t width=1280, height=720, totalWidth=1650, totalHeight=750;
     uint32_t pixelClock=74250000, fps=60;
 };
 inline bool monitorTiming(uint32_t fps, MonitorTiming& t,uint32_t width=1280,uint32_t height=720) noexcept {
-    if(fps!=60 || !((width==1280&&height==720)||(width==2560&&height==1440))) return false;
+    if((fps!=60&&fps!=MonitorCaptureFPS) || !((width==1280&&height==720)||(width==2560&&height==1440))) return false;
     t=MonitorTiming{};
 	if(width==2560)t={2560,1440,2720,1500,244800000,60};
+    t.pixelClock*=fps/60;t.fps=fps;
     return true;
 }
 using MonitorEdid=std::array<uint8_t,128>;
@@ -51,7 +54,7 @@ inline MonitorEdid monitorEdid(uint32_t fps, uint32_t serial,uint32_t width=1280
     d[0]=uint8_t(clock);d[1]=uint8_t(clock>>8);
     d[2]=uint8_t(t.width);d[3]=uint8_t(hblank);d[4]=uint8_t((t.width>>8)<<4|(hblank>>8));
     d[5]=uint8_t(t.height);d[6]=uint8_t(vblank);d[7]=uint8_t((t.height>>8)<<4|(vblank>>8));
-	// Both virtual timings have exact 60 Hz clocks and positive separate sync.
+	// Exact virtual clocks with positive separate sync; not a panel refresh claim.
     d[8]=uint8_t(width==1280?110:48);d[9]=uint8_t(width==1280?40:32);d[10]=(5<<4)|5;d[11]=0;
     d[12]=uint8_t(MonitorWidthMM);d[13]=uint8_t(MonitorHeightMM);
     d[14]=uint8_t((MonitorWidthMM>>8)<<4|(MonitorHeightMM>>8));
@@ -80,11 +83,11 @@ inline bool parseMonitorEdid(const void* data,size_t n,MonitorTiming& result) no
     if(sum&255) return false;
     const uint32_t serial=uint32_t(p[12])|uint32_t(p[13])<<8|uint32_t(p[14])<<16|uint32_t(p[15])<<24;
     if(!serial) return false;
-    for(const uint32_t width:{1280u,2560u}){
+    for(const uint32_t fps:{60u,MonitorCaptureFPS})for(const uint32_t width:{1280u,2560u}){
         const uint32_t height=width*9/16;
-        const auto expected=monitorEdid(60,serial,width,height);
+        const auto expected=monitorEdid(fps,serial,width,height);
         bool match=true;for(size_t i=0;i<expected.size();i++) if(p[i]!=expected[i]){match=false;break;}
-        if(match) return monitorTiming(60,result,width,height);
+        if(match) return monitorTiming(fps,result,width,height);
     }
     return false; // never guess a timing from an unowned EDID blob
 }

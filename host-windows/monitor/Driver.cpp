@@ -23,6 +23,7 @@
 #include "MonitorSlot.h"
 #include "SniperCadence.h"
 #include "AcquireRetry.h"
+#include "OutputCadence.h"
 namespace s7 {
 static void ntcheck(NTSTATUS status,const char* where){if(!NT_SUCCESS(status))throw Failure(HRESULT_FROM_NT(status),where);}
 static bool signaled(HANDLE event){return WaitForSingleObject(event,0)==WAIT_OBJECT_0;}
@@ -82,7 +83,8 @@ class Worker {
             wincheck(timer.get()!=nullptr,"Create high-resolution frame timer");
             const auto fps=session_->snapshot().current.fps;
             StreamKey applied{};Config config{};uint32_t keyRequest=0;
-            uint64_t nextFrame=0,lastSubmit=0,lastPTS=0;bool forceIDR=true,newPixels=false;
+            uint64_t lastSubmit=0,lastPTS=0;bool forceIDR=true,newPixels=false;
+            OutputCadence cadence;
             DesktopPicture current;
             std::unique_ptr<Encoder> encoder;
             EncoderRetryBudget retries;
@@ -104,7 +106,7 @@ class Worker {
                     if(!encoder||applied!=key){
                         pictures_.pause();encoder.reset();current=DesktopPicture{};
                         applied=key;config=snapshot.current;keyRequest=config.keyRequest;
-                        forceIDR=true;newPixels=false;nextFrame=lastSubmit=lastPTS=0;
+                        forceIDR=true;newPixels=false;lastSubmit=lastPTS=0;cadence.reset();
                         auto usb=snapshot.usb;
                         encoder=std::make_unique<Encoder>(adapter_,config,[this,usb,config,key,ack=false](Bytes bytes,uint64_t pts,bool idr)mutable{
                             const auto live=session_->snapshot();
@@ -113,7 +115,7 @@ class Worker {
                             if(!ack){usb->status(config,2,S_OK,stop_.get());ack=true;}
                         },config.sniper?nullptr:manager);
                         gpuInput_=encoder->gpuInput();
-                        if(!pictures_.configure(key))throw Failure(E_INVALIDARG,"Invalid monitor stream identity");
+                        if(!pictures_.configure(key,config.sniper?1u:2u))throw Failure(E_INVALIDARG,"Invalid monitor stream identity");
                         usb->status(config,1,S_OK,stop_.get());
                     }
                     if(keyRequest!=snapshot.current.keyRequest){keyRequest=snapshot.current.keyRequest;forceIDR=true;}
@@ -121,10 +123,9 @@ class Worker {
                     const auto latest=session_->snapshot();
                     if(!active(latest,fps)||streamKey(latest)!=applied)continue;
                     auto now=microseconds();
-                    // DWM/Sniper already produces at the selected display rate.
-                    // A second wall-clock gate coalesces fresh frames around the
-                    // deadline when MFT completion/readback have different phases.
-                    if(encoder->ready()){
+                    // Monitor capture can run at 120 Hz. Only independent pictures
+                    // are resampled; encoded H.264 references are never dropped.
+                    if(encoder->ready()&&(config.sniper||cadence.ready(now))){
                         newPixels=pictures_.take(applied,now,current,forceIDR)||newPixels;
                         // A static-desktop refresh/IDR reuses pixels deliberately. Only a
                         // successful take is a NEW desktop picture, not the repeated sample.
@@ -134,8 +135,7 @@ class Worker {
                                 if(current.gpu)encoder->submitGPU(current.gpu->allocation.Get(),pts,forceIDR);
                                 else encoder->submit(current.pixels,pts,forceIDR);
                                 forceIDR=false;newPixels=false;lastPTS=pts;pictures_.submitted(pts);lastSubmit=now;
-                                const uint64_t period=1000000/config.fps;
-                                nextFrame=(!nextFrame||now>=nextFrame+period)?now+period:nextFrame+period;
+                                cadence.submitted(now);
                             }
                         }
                     }
@@ -158,7 +158,8 @@ class Worker {
                 // quantize 60 Hz into roughly 30 Hz. No global timer-policy change.
                 const auto clockNow=microseconds();
                 uint64_t delay=active(snapshot,fps)?2000:20000;
-                if(nextFrame>clockNow)delay=std::min(delay,nextFrame-clockNow);
+                const auto untilFrame=cadence.waitUS(clockNow);
+                if(untilFrame)delay=std::min(delay,untilFrame);
                 LARGE_INTEGER due{};due.QuadPart=-static_cast<LONGLONG>(std::max<uint64_t>(100,delay)*10);
                 wincheck(SetWaitableTimer(timer.get(),&due,0,nullptr,nullptr,FALSE),"Arm frame timer");
                 HANDLE waits[]={stop_.get(),pictureReady_.get(),timer.get()};
@@ -459,7 +460,7 @@ struct Monitor {
     std::shared_ptr<Session> session;const uint32_t fps,width,height;
     MonitorEdid edid;
     std::mutex mutex;std::unique_ptr<Worker> worker;
-    Monitor(std::shared_ptr<Session> s,const Config& c):session(std::move(s)),fps(c.fps),width(c.width),height(c.height),edid(monitorEdid(fps,monitorSerial(TargetSerial),width,height)){}
+    Monitor(std::shared_ptr<Session> s,const Config& c):session(std::move(s)),fps(c.fps),width(c.width),height(c.height),edid(monitorEdid(MonitorCaptureFPS,monitorSerial(TargetSerial),width,height)){}
     void stop(){std::unique_ptr<Worker> old;{std::lock_guard<std::mutex> lock(mutex);old=std::move(worker);}old.reset();}
     ~Monitor(){stop();}
     void assign(IDDCX_SWAPCHAIN chain,LUID adapter,HANDLE available){
@@ -640,12 +641,12 @@ NTSTATUS S7DefaultModes(IDDCX_MONITOR monitor,const IDARG_IN_GETDEFAULTDESCRIPTI
     if(!in->pDefaultMonitorModes)return STATUS_INVALID_PARAMETER;
     IDDCX_MONITOR_MODE m{};m.Size=sizeof(m);m.Origin=IDDCX_MONITOR_MODE_ORIGIN_DRIVER;
     const auto target=s7::WdfObjectGet_MonitorContext(monitor)->monitor;
-    s7::fillSignal(m.MonitorVideoSignalInfo,target->fps,true,target->width,target->height);in->pDefaultMonitorModes[0]=m;return STATUS_SUCCESS;
+    s7::fillSignal(m.MonitorVideoSignalInfo,s7::MonitorCaptureFPS,true,target->width,target->height);in->pDefaultMonitorModes[0]=m;return STATUS_SUCCESS;
 }
 NTSTATUS S7TargetModes(IDDCX_MONITOR monitor,const IDARG_IN_QUERYTARGETMODES* in,IDARG_OUT_QUERYTARGETMODES* out){
     out->TargetModeBufferOutputCount=1;if(!in->TargetModeBufferInputCount)return STATUS_SUCCESS;if(!in->pTargetModes)return STATUS_INVALID_PARAMETER;
     const auto target=s7::WdfObjectGet_MonitorContext(monitor)->monitor;
-    IDDCX_TARGET_MODE mode{};mode.Size=sizeof(mode);s7::fillSignal(mode.TargetVideoSignalInfo.targetVideoSignalInfo,target->fps,false,target->width,target->height);in->pTargetModes[0]=mode;return STATUS_SUCCESS;
+    IDDCX_TARGET_MODE mode{};mode.Size=sizeof(mode);s7::fillSignal(mode.TargetVideoSignalInfo.targetVideoSignalInfo,s7::MonitorCaptureFPS,false,target->width,target->height);in->pTargetModes[0]=mode;return STATUS_SUCCESS;
 }
 NTSTATUS S7Assign(IDDCX_MONITOR monitor,const IDARG_IN_SETSWAPCHAIN* in){
     try{s7::WdfObjectGet_MonitorContext(monitor)->monitor->assign(in->hSwapChain,in->RenderAdapterLuid,in->hNextSurfaceAvailable);return STATUS_SUCCESS;}
