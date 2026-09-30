@@ -28,12 +28,15 @@ func (u *UI) saveExitReport(phase string, stopErr error) error {
 	}
 	snapshot := u.state.Snapshot()
 	if phase == "usb-stall" {
-		if link, ok := snapshot["monitor_link"].(MonitorLinkStatus); !ok || link.Phase != "lost" {
+		if link, ok := snapshot["monitor_link"].(MonitorLinkStatus); !ok || !usbStallReportNeeded(link) {
 			return nil
 		}
 	}
 	report := map[string]any{"schema": "S7-NATIVE-EXIT-1", "at": time.Now().UTC(), "phase": phase, "shutdown_action": u.shutdownAction,
-		"stop_error": errText, "runtime": snapshot, "native_messages": RuntimeMessages(), "kernel_messages": KernelMessages()}
+		"stop_error": errText, "runtime": snapshot, "native_messages": RuntimeMessages(), "kernel_messages": KernelMessages(),
+		"frame_rate": u.state.FrameRate(), "windows_endpoints": u.state.EndpointSnapshot(),
+		"last_driver_failure": u.state.HostFailureSnapshot(), "power_policy": u.state.PowerSnapshot(),
+		"camera_led": u.state.CameraLEDSnapshot(), "native_workers": u.workerSnapshot()}
 	if phase == "usb-stall" {
 		stack := make([]byte, 64<<10)
 		n := runtime.Stack(stack, true)
@@ -86,6 +89,12 @@ func (u *UI) saveExitReport(phase string, stopErr error) error {
 	return d.Sync()
 }
 
+func usbStallReportNeeded(v MonitorLinkStatus) bool {
+	// A full physical disconnect is evidence too; intentional unbind and PC
+	// suspend have different phases and must not replace the fault record.
+	return v.Phase == "lost" && v.Bound && !v.Pending
+}
+
 // At most three sustained-loss records per engineering boot, one bounded file.
 // A short driver update must not consume the only chance to capture a real loss.
 // This worker is joined before CACHE closes; disk I/O never runs in the UI loop.
@@ -100,7 +109,7 @@ func (u *UI) usbStallReportWorker(ctx context.Context) error {
 			return ctx.Err()
 		case now := <-tick.C:
 			v := u.state.MonitorLink(now)
-			if v.Phase != "lost" || !v.Bound || !v.Enumerated || v.Pending {
+			if !usbStallReportNeeded(v) {
 				lostSince = time.Time{}
 				recorded = false
 				continue

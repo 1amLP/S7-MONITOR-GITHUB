@@ -186,6 +186,30 @@ func (u *UI) toggleMonitor() {
 	})
 }
 
+func (s *State) usbRecoveryStillNeeded(now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.link.Available && s.link.Bound && s.link.Enumerated && s.link.HadReply && !s.link.Suspended &&
+		s.Settings.Enabled && s.Consumer && !s.ThermalPaused &&
+		!recentLink(now, s.LastPoll, linkHeartbeatLimit)
+}
+
+func (u *UI) reconnectLostUSB() {
+	if !u.usbRecoveryNeeded() {
+		return
+	}
+	if u.transport == nil {
+		u.state.Error(fmt.Errorf("USB transport unavailable"))
+		return
+	}
+	u.queueMonitorToggle(func() error {
+		if !u.state.usbRecoveryStillNeeded(time.Now()) {
+			return nil
+		}
+		return u.transport.Reconnect()
+	})
+}
+
 func (u *UI) monitorLinkSummary(now time.Time) (summary, detail string) {
 	v := u.state.MonitorLink(now)
 	return v.Title, v.Detail

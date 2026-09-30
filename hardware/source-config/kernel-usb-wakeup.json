@@ -1,0 +1,9 @@
+{
+  "schema": "S7_KERNEL_REPLACEMENT_1",
+  "source_commit": "fd26b7e36c450e723a8f4945a0506432bc7501f9",
+  "parent_commit": "e41817ea9198dca468b869daebad4fdb29a6c66f",
+  "configuration_sha256": "421cdaa115acbed46f60d57ef5e08a9559485788df31c04d8cb19dfeed803db3",
+  "baseline_kernel_sha256": "7d73f82eac469c5dc1e141d5ec0f28f208a0c91449ff85acc868f5a1f2dfbc01",
+  "kernel_sha256": "dad80632e86cd915c28cce6040d50edc1f05dfa7cb6d5c9795d8c22cdb7d91cc",
+  "kernel_release": "3.18.140-gfd26b7e36c45"
+}

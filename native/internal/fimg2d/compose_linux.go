@@ -16,6 +16,7 @@ import (
 	"unsafe"
 
 	"perimode/native/internal/linuxio"
+	"perimode/native/pkg/kernelpin"
 )
 
 var ErrComposerPoisoned = errors.New("G2D ownership uncertain; retain mappings until reboot")
@@ -215,7 +216,7 @@ func openComposer(ctx context.Context, r Rect, physicalPremultipliedARGB []uint3
 		return nil, err
 	}
 	kernel, err := os.ReadFile("/proc/sys/kernel/osrelease")
-	if err != nil || strings.TrimSpace(string(kernel)) != pinnedKernel {
+	if err != nil || !kernelpin.NativeSupported(strings.TrimSpace(string(kernel))) {
 		return nil, fmt.Errorf("G2D requires exact e418 kernel: %v", err)
 	}
 	var overlay *staticOverlay

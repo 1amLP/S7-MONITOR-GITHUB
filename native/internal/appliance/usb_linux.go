@@ -251,6 +251,37 @@ func (t *Transport) Toggle() error {
 	t.startCameraLocked()
 	return nil
 }
+
+func waitReceiverRelease(done <-chan struct{}, limit time.Duration) error {
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	case <-time.After(limit):
+		return fmt.Errorf("USB receiver still owns the previous session; reconnect refused")
+	}
+}
+
+func (t *Transport) Reconnect() error {
+	if !t.Bound() {
+		return fmt.Errorf("USB is not bound; reconnect refused")
+	}
+	if err := t.Toggle(); err != nil {
+		return fmt.Errorf("stop stalled USB: %w", err)
+	}
+	t.mu.Lock()
+	done := t.receiverDone
+	t.mu.Unlock()
+	if err := waitReceiverRelease(done, 2*time.Second); err != nil {
+		return err
+	}
+	if err := t.Toggle(); err != nil {
+		return fmt.Errorf("restart USB: %w", err)
+	}
+	return nil
+}
 func (t *Transport) stopReceiver() {
 	t.mu.Lock()
 	defer t.mu.Unlock()

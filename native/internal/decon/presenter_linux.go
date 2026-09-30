@@ -15,6 +15,7 @@ import (
 	"perimode/native/internal/fimg2d"
 	"perimode/native/internal/linuxio"
 	"perimode/native/internal/media"
+	"perimode/native/pkg/kernelpin"
 )
 
 type PresenterStats struct {
@@ -65,8 +66,8 @@ func OpenPresenter(device *os.File, v linuxio.FBVariable, f linuxio.FBFixed) (_ 
 		return nil, fmt.Errorf("DECON framebuffer owner missing")
 	}
 	kernel, err := os.ReadFile("/proc/sys/kernel/osrelease")
-	if err != nil || strings.TrimSpace(string(kernel)) != pinnedKernel {
-		return nil, fmt.Errorf("DECON needs pinned e418 kernel")
+	if err != nil || !kernelpin.NativeSupported(strings.TrimSpace(string(kernel))) {
+		return nil, fmt.Errorf("DECON needs an audited native kernel")
 	}
 	if err = checkFBLayout(v, f); err != nil {
 		return nil, err

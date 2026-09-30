@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Original driver: Copyright (C) 2010-2011 Texas Instruments Incorporated.
+# Authors: Felipe Balbi and Sebastian Andrzej Siewior.
+diff --git a/drivers/usb/dwc3/gadget.c b/drivers/usb/dwc3/gadget.c
+index 5514f25b..129048b2 100644
+--- a/drivers/usb/dwc3/gadget.c
++++ b/drivers/usb/dwc3/gadget.c
+@@ -2944,2 +2944,2 @@ static void dwc3_gadget_wakeup_interrupt(struct dwc3 *dwc)
+-	dwc->gadget_driver->resume(&dwc->gadget);
++	dwc3_resume_gadget(dwc);
+ }

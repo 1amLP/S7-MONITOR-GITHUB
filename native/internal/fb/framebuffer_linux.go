@@ -17,6 +17,7 @@ import (
 	"perimode/native/internal/linuxio"
 	"perimode/native/internal/media"
 	"perimode/native/internal/orientation"
+	"perimode/native/pkg/kernelpin"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -162,7 +163,7 @@ func Open(path string) (b *Buffer, err error) {
 	}
 	if path == "/dev/fb0" || path == "/dev/graphics/fb0" {
 		kernel, readErr := os.ReadFile("/proc/sys/kernel/osrelease")
-		b.s7BootVisual = readErr == nil && strings.TrimSpace(string(kernel)) == "3.18.140-ge41817ea9198"
+		b.s7BootVisual = readErr == nil && kernelpin.NativeSupported(strings.TrimSpace(string(kernel)))
 	}
 	if err = b.Validate(); err != nil {
 		return nil, fmt.Errorf("%w (variable=%+v fixed=%+v)", err, b.V, b.F)

@@ -117,7 +117,7 @@ func (c *SampleClock) Stamp(timestamp uint64, have bool) (time.Time, bool, error
 		return noFresh()
 	}
 	if timestamp == 0 || timestamp > math.MaxInt64 || timestamp > p.BootNS {
-		return fail(errors.New("SSP sample timestamp is invalid/future or uses a different clock"))
+		return fail(fmt.Errorf("SSP sample timestamp is invalid/future or uses a different clock: sample_ns=%d boot_ns=%d", timestamp, p.BootNS))
 	}
 	age := time.Duration(p.BootNS - timestamp)
 	if timestamp < c.opened.BootNS || age > c.maxAge {

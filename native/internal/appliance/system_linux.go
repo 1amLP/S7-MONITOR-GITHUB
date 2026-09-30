@@ -12,6 +12,7 @@ import (
 	"perimode/native/internal/linuxio"
 	"perimode/native/internal/media"
 	"perimode/native/internal/safety"
+	"perimode/native/pkg/kernelpin"
 	"io"
 	"log"
 	"os"
@@ -24,7 +25,7 @@ import (
 	"unsafe"
 )
 
-const PinnedKernel = "3.18.140-ge41817ea9198"
+const PinnedKernel = kernelpin.Baseline
 // Set at build time with -ldflags -X; an unset identity never binds USB.
 var PinnedSerial string
 
@@ -98,7 +99,7 @@ func loadPreviousBootMessages() {
 
 func Identity() (string, error) {
 	k, e := read("/proc/sys/kernel/osrelease")
-	if e != nil || k != PinnedKernel {
+	if e != nil || !kernelpin.NativeSupported(k) {
 		return "", fmt.Errorf("kernel identity mismatch %q: %v", k, e)
 	}
 	return physicalSerial()

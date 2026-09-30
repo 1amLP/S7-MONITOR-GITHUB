@@ -24,10 +24,26 @@ func (u *UI) deviceLeafLines(page string) ([]string, bool) {
 		}
 		return []string{"POWER SETTINGS", "CPU MODE: " + mode, "BACK: DEVICE"}, true
 	case "DRIVER_INSTALL":
+		if u.usbRecoveryNeeded() {
+			return []string{"DRIVER", "USB LINK LOST", "RECONNECT USB", "BACK: DEVICE"}, true
+		}
+		u.state.mu.Lock()
+		installerActive := u.state.InstallerActive
+		u.state.mu.Unlock()
+		if installerActive {
+			return []string{"DRIVER", "INSTALLER MODE", "RETURN TO DEVICES", "BACK: DEVICE"}, true
+		}
 		if installerUpdating(u.state.EndpointSnapshot()) {
 			return []string{"DRIVER", autoUpdateStatus, "BACK: DEVICE"}, true
 		}
-		return []string{"DRIVER", "INSTALL DRIVER", "RETURN TO DEVICES", "BACK: DEVICE"}, true
+		status, action := installerHeader(u.state.EndpointSnapshot())
+		if status == "" {
+			status = "DRIVER PACKAGE VERIFIED"
+		}
+		if action != "" {
+			return []string{"DRIVER", status, action, "BACK: DEVICE"}, true
+		}
+		return []string{"DRIVER", status, "BACK: DEVICE"}, true
 	case "DISPLAY":
 		_, actual := u.state.ambientCurrent()
 		return []string{"DEVICE / DISPLAY", fmt.Sprintf("BRIGHTNESS: %d PCT", actual), "ORIENTATION", "AUTO BRIGHTNESS", "BACK: DEVICE"}, true
@@ -71,23 +87,33 @@ func (u *UI) deviceLeafDetail(page string, row int) (menuDetail, bool) {
 		}
 		return menuDetail{}, true
 	case "DRIVER_INSTALL":
+		if u.usbRecoveryNeeded() {
+			if row == 2 {
+				return choicesDetail("USB", []string{"RECONNECT"}, -1), true
+			}
+			return informationDetail("USB", "LINK LOST"), true
+		}
+		u.state.mu.Lock()
+		installerActive := u.state.InstallerActive
+		u.state.mu.Unlock()
+		if installerActive {
+			if row == 2 {
+				return choicesDetail("USB", []string{"CONNECT DEVICES"}, -1), true
+			}
+			return informationDetail("USB", "INSTALLER MODE"), true
+		}
 		if installerUpdating(u.state.EndpointSnapshot()) {
 			return menuDetail{Title: autoUpdateStatus}, true
 		}
-		if row == 1 {
-			d := choicesDetail("INSTALL DRIVER", []string{"INSTALL"}, -1)
-			u.state.mu.Lock()
-			d.Hint = u.state.InstallerStatus
-			u.state.mu.Unlock()
-			if u.state.EndpointSnapshot().PackageVerified {
-				d.Hint = "DRIVER PACKAGE VERIFIED"
-			} else if d.Hint == "" {
-				d.Hint = "DRIVER PACKAGE NOT VERIFIED"
-			}
-			return d, true
+		status, action := installerHeader(u.state.EndpointSnapshot())
+		if status == "" {
+			status = "DRIVER PACKAGE VERIFIED"
 		}
-		if row == 2 {
-			return choicesDetail("USB", []string{"CONNECT DEVICES"}, -1), true
+		if row == 1 {
+			return informationDetail("DRIVER", status), true
+		}
+		if row == 2 && action != "" {
+			return choicesDetail("USB", []string{"OPEN SETUP DISK"}, -1), true
 		}
 		return menuDetail{}, true
 	case "DEVICE":
@@ -175,19 +201,21 @@ func (u *UI) selectDeviceDetail(page string, row, option int) bool {
 		}
 		return true
 	case "DRIVER_INSTALL":
-		if option == 0 && row >= 1 && row <= 2 {
-			u.async(func() error {
-				var err error
-				if row == 1 {
-					err = u.startInstallerMedia()
-				} else {
-					err = u.stopInstallerMedia()
-				}
-				if err != nil {
-					u.installerMessage(err.Error())
-				}
-				return err
-			})
+		if u.usbRecoveryNeeded() {
+			if row == 2 && option == 0 {
+				u.reconnectLostUSB()
+			}
+			return true
+		}
+		u.state.mu.Lock()
+		installerActive := u.state.InstallerActive
+		u.state.mu.Unlock()
+		_, action := installerHeader(u.state.EndpointSnapshot())
+		if option == 0 && row == 2 && (installerActive || action != "") {
+			if installerActive {
+				action = "RETURN TO DEVICES"
+			}
+			u.activateUSBHeader(action)
 		}
 		return true
 	case "SCREEN_ROTATION":

@@ -144,7 +144,7 @@ func (u *UI) menuInput(contacts []hid.Contact) {
 				u.menu(u.parentMenu(page))
 			}
 		} else if row == fb.GlassInstallDisk {
-			u.toggleInstallerDisk()
+			u.activateUSBHeader(nowLabel)
 		} else if row >= fb.GlassCategoryBase {
 			u.selectCategory(row - fb.GlassCategoryBase)
 		} else if row >= 0 {

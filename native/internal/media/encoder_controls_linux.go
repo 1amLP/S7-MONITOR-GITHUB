@@ -7,6 +7,7 @@ package media
 // S_EXT_CTRLS; G_CTRL does not read back these initial encoder parameters.
 import (
 	"fmt"
+	"perimode/native/pkg/kernelpin"
 	"runtime"
 	"strings"
 	"syscall"
@@ -54,17 +55,17 @@ type extControls struct {
 type packedControl [20]byte
 
 func matchEncoderKernel(system, release, machine string) error {
-	// Both revisions have MFC tree ee4d34a7c94c8b7cbcb3d30570152b91df8b60e6
+	// These revisions have MFC tree ee4d34a7c94c8b7cbcb3d30570152b91df8b60e6
 	// and identical V4L2 UAPI, videobuf2, ION and arm64 headers. Other kernels
 	// remain rejected; runtime format/control/queue checks are still mandatory.
 	if system == "Linux" && machine == "aarch64" {
-		for _, prefix := range []string{"3.18.140-ge41817ea9198", "3.18.140-g481bdb278a10"} {
+		for _, prefix := range []string{kernelpin.Baseline, kernelpin.LegacyCamera, kernelpin.USBWakeupFix} {
 			if release == prefix || strings.HasPrefix(release, prefix+"-") {
 				return nil
 			}
 		}
 	}
-	return fmt.Errorf("MFC encoder requires verified e41817ea9198/481bdb278a10 3.18.140/aarch64 ABI; found %s/%s/%s", system, release, machine)
+	return fmt.Errorf("MFC encoder requires an audited herolte 3.18.140/aarch64 ABI; found %s/%s/%s", system, release, machine)
 }
 func requireEncoderKernel() error {
 	var u syscall.Utsname

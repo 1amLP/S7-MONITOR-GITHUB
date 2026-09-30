@@ -142,10 +142,32 @@ func (u *UI) stopInstallerMedia() error {
 	return err
 }
 
-func (u *UI) toggleInstallerDisk() {
+func (u *UI) installerActionAllowed(action string) bool {
+	u.state.mu.Lock()
+	active := u.state.InstallerActive
+	u.state.mu.Unlock()
+	if action == "RETURN TO DEVICES" {
+		return active
+	}
+	_, current := installerHeader(u.state.EndpointSnapshot())
+	return action == "OPEN SETUP DISK" && !active && current == action
+}
+
+func (u *UI) activateUSBHeader(action string) {
+	if action == "RECONNECT USB" {
+		u.reconnectLostUSB()
+		return
+	}
+	if !u.installerActionAllowed(action) {
+		return
+	}
 	u.async(func() error {
+		// State may recover while an action waits behind another control write.
+		if !u.installerActionAllowed(action) {
+			return nil
+		}
 		var err error
-		if u.installer != nil {
+		if action == "RETURN TO DEVICES" {
 			err = u.stopInstallerMedia()
 		} else {
 			err = u.startInstallerMedia()
@@ -168,7 +190,7 @@ func installerUpdating(v EndpointStatus) bool {
 
 func installerHeader(v EndpointStatus) (string, string) {
 	status := installerPrompt(v)
-	if status == "" || status == autoUpdateStatus {
+	if status != "DRIVER UPDATE REQUIRED" && status != "DRIVER UPDATE FAILED" {
 		return status, ""
 	}
 	return status, "OPEN SETUP DISK"
@@ -179,7 +201,7 @@ func installerPrompt(v EndpointStatus) string {
 		return ""
 	}
 	if v.Updated.IsZero() || time.Since(v.Updated) > 10*time.Second {
-		return "DRIVERS NOT VERIFIED"
+		return "DRIVER STATUS UNKNOWN"
 	}
 	switch v.Error {
 	case 0x800703e5:
@@ -191,6 +213,21 @@ func installerPrompt(v EndpointStatus) string {
 	default:
 		return "DRIVERS NOT VERIFIED"
 	}
+}
+
+func (u *UI) usbRecoveryNeeded() bool {
+	u.state.mu.Lock()
+	installerActive := u.state.InstallerActive
+	u.state.mu.Unlock()
+	now := time.Now()
+	if installerActive || u.state.MonitorLink(now).Phase != "lost" || !u.state.usbRecoveryStillNeeded(now) {
+		return false
+	}
+	switch installerPrompt(u.state.EndpointSnapshot()) {
+	case autoUpdateStatus, "DRIVER UPDATE REQUIRED", "DRIVER UPDATE FAILED":
+		return false
+	}
+	return true
 }
 
 func (u *UI) installerCompletion(ctx context.Context, release uint32, tty string) {

@@ -49,6 +49,12 @@ if($existing.Count){
  $old=Get-S7MonitorDriverFile $existing[0].InstanceId
  $publisher=(Get-AuthenticodeSignature -LiteralPath $cat).SignerCertificate.Thumbprint
  Assert-S7Publisher -Path $old -Thumbprint $publisher
+ $versions=[regex]::Matches([IO.File]::ReadAllText($inf),'(?m)^DriverVer=[^,]+,(\d+(?:\.\d+){3})\s*$')
+ if($versions.Count -ne 1){throw 'Missing unique monitor DriverVer'}
+ $installedVersion=[version](Get-PnpDeviceProperty -InstanceId $existing[0].InstanceId -KeyName DEVPKEY_Device_DriverVersion).Data
+ if($installedVersion -eq [version]$versions[0].Groups[1].Value -and (Get-FileHash -LiteralPath $old).Hash -ne (Get-FileHash -LiteralPath $dll).Hash){
+  throw 'Changed monitor binary has the installed DriverVer; rebuild with a new version before updating'
+ }
 }
 if($CheckOnly){Write-Output 'Monitor installation checks passed; no device changed.';return}
 if($PSCmdlet.ShouldProcess('Root\S7H264Monitor','Install or update one signed S7 H.264 virtual monitor')){

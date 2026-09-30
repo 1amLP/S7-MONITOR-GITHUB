@@ -376,6 +376,8 @@ func (u *UI) currentMenuStatus() fb.MenuStatus {
 	u.state.mu.Unlock()
 	if installerActive {
 		v.InstallStatus, v.InstallAction = "INSTALLER MODE", "RETURN TO DEVICES"
+	} else if u.usbRecoveryNeeded() {
+		v.InstallStatus, v.InstallAction = "USB LINK LOST", "RECONNECT USB"
 	} else {
 		v.InstallStatus, v.InstallAction = installerHeader(u.state.EndpointSnapshot())
 	}
@@ -1411,7 +1413,10 @@ func RunNative(parent context.Context, health *safety.Liveness) error {
 	}
 	sensorErr := requestTouchSensor90()
 	s.mu.Lock()
-	if sensorErr != nil {
+	if errors.Is(sensorErr, errTouchSensorRateUnsupported) {
+		s.TouchSensorRateStatus = "NATIVE SCAN / 90 HZ HID LIMIT"
+		sensorErr = nil
+	} else if sensorErr != nil {
 		s.TouchSensorRateStatus = "90 HZ REQUEST FAILED"
 	} else {
 		s.TouchSensorRateStatus = "90 HZ REQUESTED / UNVERIFIED"

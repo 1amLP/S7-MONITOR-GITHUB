@@ -98,6 +98,7 @@ func (s *Session) Drain(present func(media.Image) error) (int, error) {
 	if _, e := s.raw.Pump(now); e != nil {
 		return 0, e
 	}
+	highSpeed := s.raw.automatic.Limits.FrameDurationNS < 1_000_000_000/60
 	var e error
 	for n := 0; n < s.raw.Capture.BufferCount(); n++ {
 		if cap, ok := s.isp.Capture.(interface{ QueuedCount() int }); ok {
@@ -106,6 +107,8 @@ func (s *Session) Drain(present func(media.Image) error) (int, error) {
 			}
 		}
 		var forwarded bool
+		// Preserve the kernel's 3AA-to-ISP group-frame sequence. Coalesce only
+		// completed NV12 results, after all corresponding RAW requests retire.
 		forwarded, e = s.raw.DeliverNext(now, func(f fimcdma.Frame, b []byte) error {
 			if e := s.forward(f, b); e != nil {
 				return e
@@ -127,7 +130,7 @@ func (s *Session) Drain(present func(media.Image) error) (int, error) {
 		return 0, e
 	}
 	deliver, limit := s.isp.DeliverLatest, 1
-	if s.raw.automatic.Limits.FrameDurationNS < 1_000_000_000/60 {
+	if highSpeed {
 		deliver, limit = s.isp.DeliverNext, 2
 	}
 	n := 0

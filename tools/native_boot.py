@@ -2,7 +2,8 @@
 """Offline-only native initramfs builder for one pinned S7 BOOT input.
 
 No block-device access, mounts, flashing, network, arbitrary unpack paths, or
-commands from archives. Kernel, DTB, addresses and header cmdline are preserved.
+commands from archives. DTB, addresses and header cmdline are preserved. Kernel
+replacement requires the audited DWC3 build's source/configuration/hash pin.
 """
 from __future__ import annotations
 import argparse
@@ -21,6 +22,29 @@ FOOTER = b'SEANDROIDENFORCE'
 INPUT_SHA = '6544f30ceb74fda8be35d55664dd3570bdd5a00f453594ed1d488dab7c54233e'
 KERNEL_SHA = '7d73f82eac469c5dc1e141d5ec0f28f208a0c91449ff85acc868f5a1f2dfbc01'
 DTB_SHA = '0c180a7249d70e7a4623a7a977a5f552670aa978fe981b992557e77c5349318a'
+KERNEL_FIX_SOURCE = 'fd26b7e36c450e723a8f4945a0506432bc7501f9'
+KERNEL_FIX_CONFIG = '421cdaa115acbed46f60d57ef5e08a9559485788df31c04d8cb19dfeed803db3'
+
+
+def load_kernel_replacement(image: Path | None, pin_path: Path | None):
+    if image is None and pin_path is None:
+        return None, None
+    if image is None or pin_path is None:
+        raise ValueError('kernel replacement requires both image and pin')
+    if image.is_symlink() or not image.is_file() or not 1 << 20 <= image.stat().st_size <= CAPACITY:
+        raise ValueError('kernel replacement must be a bounded regular Image')
+    pin = json.loads(pin_path.read_text())
+    if (pin.get('schema') != 'S7_KERNEL_REPLACEMENT_1' or
+            pin.get('baseline_kernel_sha256') != KERNEL_SHA or
+            pin.get('source_commit') != KERNEL_FIX_SOURCE or
+            pin.get('configuration_sha256') != KERNEL_FIX_CONFIG or
+            pin.get('kernel_release') != '3.18.140-g' + KERNEL_FIX_SOURCE[:12]):
+        raise ValueError('kernel replacement source/configuration pin mismatch')
+    data = image.read_bytes()
+    if (sha(data) != pin.get('kernel_sha256') or data[56:60] != b'ARMd' or
+            b'Linux version ' + pin['kernel_release'].encode('ascii') + b' ' not in data):
+        raise ValueError('kernel replacement hash/header/release mismatch')
+    return data, pin
 
 
 def sha(b: bytes) -> str:
@@ -98,7 +122,7 @@ class Boot:
     payload_end: int
 
     @staticmethod
-    def parse(data: bytes, pinned: bool = False) -> 'Boot':
+    def parse(data: bytes, pinned: bool = False, kernel_sha: str = KERNEL_SHA) -> 'Boot':
         if not PAGE <= len(data) <= CAPACITY or data[:8] != b'ANDROID!':
             raise ValueError('invalid S7 legacy boot container')
         if pinned and (len(data) != CAPACITY or sha(data) != INPUT_SHA):
@@ -126,18 +150,25 @@ class Boot:
             raise ValueError('generated footer/padding mismatch')
         if data[576:596] != digest(parts) or any(data[596:608]):
             raise ValueError('legacy payload SHA1 mismatch')
-        if sha(parts[0]) != KERNEL_SHA or sha(parts[3]) != DTB_SHA:
+        if sha(parts[0]) != kernel_sha or sha(parts[3]) != DTB_SHA:
             raise ValueError('kernel/DTB not the pinned S7 payloads')
         if parts[0][56:60] != b'ARMd':
             raise ValueError('not a raw ARM64 kernel')
         return Boot(data[:PAGE], parts, offset + len(FOOTER))
 
-    def native(self, ramdisk: bytes) -> bytes:
+    def native(self, ramdisk: bytes, kernel: bytes | None = None, kernel_sha: str = KERNEL_SHA) -> bytes:
         if not ramdisk.startswith(b'\xfd7zXZ\x00'):
             raise ValueError('native ramdisk must use kernel-supported XZ')
         parts = self.parts.copy()
+        if kernel is not None:
+            if sha(kernel) != kernel_sha or kernel[56:60] != b'ARMd':
+                raise ValueError('kernel replacement hash/header mismatch')
+            parts[0] = kernel
+        elif kernel_sha != KERNEL_SHA:
+            raise ValueError('kernel hash changed without replacement bytes')
         parts[1] = ramdisk
         header = bytearray(self.header)
+        struct.pack_into('<I', header, 8, len(parts[0]))
         struct.pack_into('<I', header, 16, len(ramdisk))
         header[576:596] = digest(parts)
         data = bytes(header)
@@ -147,10 +178,12 @@ class Boot:
         if len(data) > CAPACITY:
             raise ValueError(f'native BOOT requires {len(data)} bytes, capacity is {CAPACITY}')
         data += bytes(CAPACITY - len(data))
-        checked = Boot.parse(data)
-        if checked.parts[0] != self.parts[0] or checked.parts[2:] != self.parts[2:]:
+        checked = Boot.parse(data, kernel_sha=kernel_sha)
+        if checked.parts[0] != parts[0] or checked.parts[2:] != self.parts[2:]:
             raise ValueError('protected payload was changed')
         allow = set(range(16, 20)) | set(range(576, 596))
+        if kernel is not None:
+            allow |= set(range(8, 12))
         if any(a != b and i not in allow for i, (a, b) in enumerate(zip(self.header, checked.header))):
             raise ValueError('protected header byte was changed')
         return data
@@ -217,7 +250,8 @@ def check_arm64_init(b: bytes) -> None:
 def make_ramdisk(init_path: Path, fw_dir: Path, usb_trial_fps: int = 0, lab_seconds: int = 0,
                  direct_mfc_lab: bool = False, direct_mfc: bool = False,
                  gpu_probe: bool = False, ui_diagnostics: bool = False,
-                 windows_package_pin: Path | None = None) -> tuple[bytes, list[dict]]:
+                 windows_package_pin: Path | None = None,
+                 kernel_sha256: str = KERNEL_SHA) -> tuple[bytes, list[dict]]:
     if usb_trial_fps not in (0, 120, 240):
         raise ValueError('only explicit rear 720p120/240 USB trials are supported')
     if lab_seconds not in (0, 120) or (lab_seconds and usb_trial_fps):
@@ -385,7 +419,7 @@ def make_ramdisk(init_path: Path, fw_dir: Path, usb_trial_fps: int = 0, lab_seco
               'auto_brightness_reader_implemented': True, 'auto_brightness_controller_implemented': True,
               'auto_brightness_full_implemented': False, 'auto_brightness_default_enabled': False,
               'auto_brightness': 'packed26 SSP lux, isolated lhd supervisor, shared mask lease, smooth limits/manual fallback; hardware unverified',
-              'kernel_sha256': KERNEL_SHA, 'dtb_sha256': DTB_SHA, 'init_sha256': sha(init)}
+              'kernel_sha256': kernel_sha256, 'dtb_sha256': DTB_SHA, 'init_sha256': sha(init)}
     status.update(camera_usb_trial_fps=usb_trial_fps, camera_usb_trial_limit_seconds=30 if usb_trial_fps else 0,
                   camera_usb_trial_requires_home=True, camera_usb_trial_saves_preferences=False)
     status.update(monitor_codec_backend=backend, camera_codec_backend=backend,
@@ -427,14 +461,17 @@ def write_new(path: Path, b: bytes) -> None:
 
 def build(original: Path, init: Path, fw: Path, outdir: Path, usb_trial_fps: int = 0, lab_seconds: int = 0,
           direct_mfc_lab: bool = False, direct_mfc: bool = False, gpu_probe: bool = False, ui_diagnostics: bool = False,
-          windows_package_pin: Path | None = None) -> dict:
+          windows_package_pin: Path | None = None,
+          kernel_image: Path | None = None, kernel_pin: Path | None = None) -> dict:
     if not stat.S_ISREG(original.stat().st_mode):
         raise ValueError('input must be a regular file, never a device node')
     base_data = original.read_bytes()
     base = Boot.parse(base_data, pinned=True)
-    ramdisk, manifest = make_ramdisk(init, fw, usb_trial_fps, lab_seconds, direct_mfc_lab, direct_mfc, gpu_probe, ui_diagnostics, windows_package_pin)
-    image = base.native(ramdisk)
-    result = Boot.parse(image)
+    kernel, kernel_metadata = load_kernel_replacement(kernel_image, kernel_pin)
+    kernel_sha = kernel_metadata['kernel_sha256'] if kernel_metadata else KERNEL_SHA
+    ramdisk, manifest = make_ramdisk(init, fw, usb_trial_fps, lab_seconds, direct_mfc_lab, direct_mfc, gpu_probe, ui_diagnostics, windows_package_pin, kernel_sha256=kernel_sha)
+    image = base.native(ramdisk, kernel=kernel, kernel_sha=kernel_sha)
+    result = Boot.parse(image, kernel_sha=kernel_sha)
     outdir.mkdir(parents=True, exist_ok=False)
     write_new(outdir/'BOOT_NATIVE_EXPERIMENTAL.img', image)
     write_new(outdir/'BOOT_INPUT_ROLLBACK.img', base_data)
@@ -446,7 +483,8 @@ def build(original: Path, init: Path, fw: Path, outdir: Path, usb_trial_fps: int
               'gpu_probe_in_boot':gpu_probe, 'gpu_menu_gpu_only':False,
               'boot_bytes':len(image), 'payload_end':result.payload_end, 'headroom_bytes':CAPACITY-result.payload_end,
               'kernel_sha256':sha(result.parts[0]), 'dtb_sha256':sha(result.parts[3]),
-              'kernel_and_dtb_unchanged':True, 'header_only_ramdisk_size_and_sha1_changed':True,
+              'kernel_and_dtb_unchanged':kernel is None, 'dtb_unchanged':True,
+              'kernel_replacement':kernel_metadata, 'header_only_ramdisk_size_and_sha1_changed':kernel is None,
               'input_vendor_signature_tail_not_reused':True,
               'header_cmdline_unchanged':True, 'ramdisk_bytes':len(ramdisk),
               'native_init_sha256':sha(files['init'][1]), 'ramdisk_entries':len(files),
@@ -501,6 +539,8 @@ def main() -> None:
     ap.add_argument('--output-dir',type=Path,required=True)
     ap.add_argument('--windows-package-pin',type=Path,
                     help='pin the signed Windows package stored read-only on SYSTEM; not an automatic clean-PC bootstrap')
+    ap.add_argument('--kernel-image',type=Path,help='audited DWC3 wakeup kernel Image')
+    ap.add_argument('--kernel-pin',type=Path,help='matching audited source/configuration/hash pin')
     ap.add_argument('--highfps-usb-trial', type=int, choices=(120,240), default=0,
                     help='explicit engineering BOOT: fixed rear mode, Home required, 30s capture limit, no preference writes')
     ap.add_argument('--lab-seconds', type=int, choices=(120,), default=0,
@@ -516,7 +556,7 @@ def main() -> None:
     args=ap.parse_args()
     result=build(args.input_boot,args.init,args.firmware_dir,args.output_dir,args.highfps_usb_trial,
                  args.lab_seconds,args.direct_mfc_lab,args.direct_mfc,args.gpu_probe,args.ui_diagnostics,
-                 args.windows_package_pin)
+                 args.windows_package_pin,args.kernel_image,args.kernel_pin)
     print(json.dumps({k:v for k,v in result.items() if k!='firmware_manifest'},indent=2))
 if __name__=='__main__':
     main()

@@ -13,6 +13,8 @@ import (
 // The e418/481 FIMC-IS kernel completes ischain_open_wrap(true) only after
 // this control. Group leaders must already be open, and S_INPUT must follow.
 const EndOfStreamCID uint32 = 0x009a103a
+const HALVersionCID uint32 = 0x009a1386
+const cameraHAL32 int32 = 1
 
 func CompleteISChainOpen(fd int, driver, card, abi string) error {
 	if err := verifyVideoFD(fd); err != nil {
@@ -36,6 +38,15 @@ func completeISChainOpen(driver, card, abi string, call func(uintptr, unsafe.Poi
 	}
 	if ctrl.ID != EndOfStreamCID || ctrl.Value != 0 {
 		return fmt.Errorf("FIMC changed END_OF_STREAM control")
+	}
+	// Resource open defaults to HAL 1.0. Select the Camera2 request scheduler
+	// and stock HAL 3.2 DVFS table after open, before S_INPUT/STREAMON.
+	ctrl = media.Control{ID: HALVersionCID, Value: cameraHAL32}
+	if err := call(media.SetControl, unsafe.Pointer(&ctrl)); err != nil {
+		return fmt.Errorf("FIMC Camera2 HAL version: %w", err)
+	}
+	if ctrl.ID != HALVersionCID || ctrl.Value != cameraHAL32 {
+		return fmt.Errorf("FIMC changed HAL version control")
 	}
 	return nil
 }

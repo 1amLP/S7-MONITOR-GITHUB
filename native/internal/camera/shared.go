@@ -64,7 +64,7 @@ type sharedReader struct {
 	closed             bool
 	err                error
 	dropped, delivered uint64
-	lastPreview        time.Time
+	nextPreview        time.Time
 }
 
 type ReaderStats struct {
@@ -378,7 +378,7 @@ func (r *sharedReader) offer(im media.Image, now time.Time) {
 	}
 	// Preview is independent of encoded FPS. Its scaling/rotation/color work is
 	// performed by Mali; native subscribers retain the same DMA allocation.
-	if r.role == 1 && r.session != nil && r.session.settings.Mode.FPS > 30 && !r.lastPreview.IsZero() && now.Sub(r.lastPreview) < time.Second/30 {
+	if r.role == 1 && r.session != nil && r.session.settings.Mode.FPS > 30 && now.Before(r.nextPreview) {
 		r.dropped++
 		return
 	}
@@ -404,7 +404,7 @@ func (r *sharedReader) offer(im media.Image, now time.Time) {
 		r.enqueueLocked(index)
 		r.signalLocked()
 		if r.role == 1 {
-			r.lastPreview = now
+			r.advancePreviewLocked(now)
 		}
 		return
 	}
@@ -427,11 +427,22 @@ func (r *sharedReader) offer(im media.Image, now time.Time) {
 		}
 	}
 	if r.role == 1 {
-		r.lastPreview = now
+		r.advancePreviewLocked(now)
 	}
 	slot.PTS = im.PTS
 	r.enqueueLocked(index)
 	r.signalLocked()
+}
+
+func (r *sharedReader) advancePreviewLocked(now time.Time) {
+	const period = time.Second / 30
+	// Keep the cadence phase when a rounded source period misses one deadline.
+	// Reset after a real pause instead of emitting a catch-up burst.
+	if r.nextPreview.IsZero() || now.Sub(r.nextPreview) >= period {
+		r.nextPreview = now.Add(period)
+	} else {
+		r.nextPreview = r.nextPreview.Add(period)
+	}
 }
 func (r *sharedReader) enqueueLocked(index int) {
 	if r.pending < 0 {

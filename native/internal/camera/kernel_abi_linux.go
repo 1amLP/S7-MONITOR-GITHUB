@@ -8,15 +8,18 @@ import (
 	"syscall"
 
 	"perimode/native/internal/camera/fimcdma"
+	"perimode/native/pkg/kernelpin"
 )
 
 // These releases share the camera/ION/UAPI source trees and embedded config.
 // 481 is e418's direct child; only the private USB UVC lifecycle changed.
+// fd26 is e418 with the DWC3 optional-resume callback guard only.
 // See hardware/source-config/camera-kernel-abi-evidence.json. This admission
 // does not claim UVC producer-close isolation or successful sensor capture.
 var cameraKernelReleases = [...]string{
 	"3.18.140-g481bdb278a10",
 	"3.18.140-ge41817ea9198",
+	kernelpin.USBWakeupFix,
 }
 
 func requireRunningCameraKernel(abi string) error {
