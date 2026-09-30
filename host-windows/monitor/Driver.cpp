@@ -22,6 +22,7 @@
 #include "FrameHandoff.h"
 #include "MonitorSlot.h"
 #include "SniperCadence.h"
+#include "AcquireRetry.h"
 namespace s7 {
 static void ntcheck(NTSTATUS status,const char* where){if(!NT_SUCCESS(status))throw Failure(HRESULT_FROM_NT(status),where);}
 static bool signaled(HANDLE event){return WaitForSingleObject(event,0)==WAIT_OBJECT_0;}
@@ -183,6 +184,27 @@ class Worker {
         check(D3D11CreateDevice(adapter.Get(),D3D_DRIVER_TYPE_UNKNOWN,nullptr,D3D11_CREATE_DEVICE_BGRA_SUPPORT|D3D11_CREATE_DEVICE_VIDEO_SUPPORT,nullptr,0,D3D11_SDK_VERSION,&device,nullptr,&context),"Create render GPU device");
         ComPtr<IDXGIDevice> dxgi;check(device.As(&dxgi),"Render DXGI device");
         IDARG_IN_SWAPCHAINSETDEVICE bind{};bind.pDevice=dxgi.Get();check(IddCxSwapChainSetDevice(chain_,&bind),"Bind IddCx swap-chain device");
+        struct GpuPriorityScope {
+            ComPtr<IDXGIDevice> device;INT original=0;bool changed=false;
+            ~GpuPriorityScope(){if(changed){const auto hr=device->SetGPUThreadPriority(original);if(FAILED(hr))monitorEvent("Restore S7 GPU priority",hr);}}
+        } gpuPriority{dxgi};
+#if IDDCX_VERSION_MINOR >= 9
+        // IddCx chooses the realtime band for this device, not a system-wide
+        // priority or display policy. Downlevel systems retain the old path.
+        if(IDD_IS_FUNCTION_AVAILABLE(IddCxSetRealtimeGPUPriority)){
+            const auto previous=dxgi->GetGPUThreadPriority(&gpuPriority.original);
+            if(SUCCEEDED(previous)){
+                IDARG_IN_SETREALTIMEGPUPRIORITY priorityRequest{};priorityRequest.pDevice=dxgi.Get();
+                const auto hr=IddCxSetRealtimeGPUPriority(chain_,&priorityRequest);
+                gpuPriority.changed=SUCCEEDED(hr);
+                INT actual=0;const auto query=dxgi->GetGPUThreadPriority(&actual);
+                char detail[192]{};
+                sprintf_s(detail,"S7 GPU deadline priority accepted=%u original=0x%08x actual=0x%08x query_hr=0x%08lx",
+                    gpuPriority.changed?1u:0u,static_cast<unsigned>(gpuPriority.original),static_cast<unsigned>(actual),static_cast<unsigned long>(query));
+                monitorEvent(detail,hr);
+            }else monitorEvent("Read S7 GPU priority; default retained",previous);
+        }else monitorEvent("S7 GPU deadline priority unavailable; default retained");
+#endif
         const auto initial=session_->snapshot().current;
         DesktopReadback readback(device.Get(),context.Get(),initial.width,initial.height);
         std::shared_ptr<GpuFramePool> gpu;
@@ -209,7 +231,9 @@ class Worker {
         uint64_t reportedReadbacks=0,reportedReadbackUS=0,reportedGPUFrames=0,reportedGPUWaits=0;
         uint64_t convertCount=0,convertUS=0,convertMaxUS=0,finishMaxUS=0;
         uint64_t wakeEvents=0,wakeTimeouts=0,timeoutFrames=0,waitMaxUS=0;
-        bool afterTimeout=false;
+        uint64_t timerWakes=0,timerFrames=0;
+        bool afterTimeout=false,afterTimer=false;
+        AcquireRetry acquireRetry;acquireRetry.activity(microseconds());
         UINT lastFrameNumber=0;bool haveFrameNumber=false;
         while(!signaled(stop_.get())){
             const auto snapshot=session_->snapshot();const auto key=streamKey(snapshot);
@@ -235,12 +259,13 @@ class Worker {
                     monitorEvent(sample);
                 }
                 _snprintf_s(sample,sizeof(sample),_TRUNCATE,
-                    "Capture work convert_count=%llu convert_mean_us=%llu convert_max_us=%llu finish_max_us=%llu frame_events=%llu wait_timeouts=%llu frames_after_timeout=%llu wait_max_us=%llu",
+                    "Capture work convert_count=%llu convert_mean_us=%llu convert_max_us=%llu finish_max_us=%llu frame_events=%llu wait_timeouts=%llu frames_after_timeout=%llu wait_max_us=%llu timer_wakes=%llu frames_after_timer=%llu",
                     (unsigned long long)convertCount,(unsigned long long)(convertCount?convertUS/convertCount:0),(unsigned long long)convertMaxUS,
                     (unsigned long long)finishMaxUS,(unsigned long long)wakeEvents,(unsigned long long)wakeTimeouts,
-                    (unsigned long long)timeoutFrames,(unsigned long long)waitMaxUS);
+                    (unsigned long long)timeoutFrames,(unsigned long long)waitMaxUS,(unsigned long long)timerWakes,(unsigned long long)timerFrames);
                 monitorEvent(sample);
                 convertCount=convertUS=convertMaxUS=finishMaxUS=wakeEvents=wakeTimeouts=timeoutFrames=waitMaxUS=0;
+                timerWakes=timerFrames=0;
                 reportedGPUFrames=gpuFrames_;reportedGPUWaits=gpuPoolWaits_;
                 reportedReadbacks=captureCount_;reportedReadbackUS=captureUS_;
                 desiredFirst=desiredLast=acquireMaxUS=lateMaxUS=0;
@@ -328,9 +353,11 @@ class Worker {
             if(result!=E_PENDING){
                 check(result,"Acquire desktop frame");
                 if(afterTimeout)++timeoutFrames;
+                if(afterTimer)++timerFrames;
                 ComPtr<IDXGIResource> resource;resource.Attach(acquired.MetaData.pSurface);
                 check(resource.As(&desktop),"Desktop texture");
                 desktopKey=key;desktopTime=microseconds();
+                acquireRetry.activity(desktopTime);
                 if(streaming&&!sniper){
                     ++acquires;acquireMaxUS=std::max(acquireMaxUS,desktopTime-acquireStart);
                     const auto number=acquired.MetaData.PresentationFrameNumber;
@@ -353,7 +380,7 @@ class Worker {
                    (description.Format!=DXGI_FORMAT_B8G8R8A8_UNORM&&description.Format!=DXGI_FORMAT_B8G8R8A8_UNORM_SRGB))
                     throw Failure(E_NOTIMPL,"Desktop differs from advertised S7 monitor mode");
             }
-            afterTimeout=false;
+            afterTimeout=afterTimer=false;
             bool gpuStarved=false;
             if(desktop&&!copyPending){
                 if(streaming&&!sniper&&desktopKey==key){
@@ -389,17 +416,21 @@ class Worker {
             if(desktop&&!copyPending&&!gpuStarved)continue;
             HANDLE waits[]={stop_.get(),desktop?readbackTimer.get():available_,readbackTimer.get()};
             const bool pending=copyPending||captureWaiting||sniper||gpuStarved;
-            if(pending){
-                LARGE_INTEGER due{};due.QuadPart=sniper?-LONGLONG(sniperWait(primaryPoll,microseconds(),copyPending)*10):(copyPending?-10000:-20000);
-                wincheck(SetWaitableTimer(readbackTimer.get(),&due,0,nullptr,nullptr,FALSE),"Wait for pending GPU copy");
+            const bool timed=pending||streaming;
+            if(timed){
+                const auto delay=sniper?sniperWait(primaryPoll,microseconds(),copyPending):
+                    (copyPending?1000:(pending?2000:acquireRetry.delayUS(streaming,microseconds())));
+                LARGE_INTEGER due{};due.QuadPart=-LONGLONG(delay*10);
+                wincheck(SetWaitableTimer(readbackTimer.get(),&due,0,nullptr,nullptr,FALSE),"Wait for capture/GPU work");
             }
             const auto waitStart=microseconds();
-            // Match the IddCx sample's frame-period retry while streaming. A
-            // missed/coalesced notification must not impose a 50 ms pause.
-            DWORD wait=WaitForMultipleObjects(desktop?2:(pending?3:2),waits,FALSE,pending?INFINITE:(streaming?16:50));
+            // E_PENDING can outlive the surface event. A coarse 16 ms timeout
+            // was observed taking 32 ms and skipping an existing frame number.
+            DWORD wait=WaitForMultipleObjects(desktop?2:(timed?3:2),waits,FALSE,timed?INFINITE:50);
             waitMaxUS=std::max(waitMaxUS,microseconds()-waitStart);
             if(wait==WAIT_TIMEOUT){++wakeTimeouts;afterTimeout=true;}
-            else if(!desktop&&wait==WAIT_OBJECT_0+1)++wakeEvents;
+            else if(!desktop&&wait==WAIT_OBJECT_0+1){++wakeEvents;acquireRetry.activity(microseconds());}
+            else if(!desktop&&wait==WAIT_OBJECT_0+2){++timerWakes;afterTimer=true;}
             if(wait==WAIT_OBJECT_0)break;if(wait==WAIT_FAILED)throw Failure(HRESULT_FROM_WIN32(GetLastError()),"Wait for desktop frame");
         }
     }

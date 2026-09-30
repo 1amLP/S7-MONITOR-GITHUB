@@ -12,7 +12,7 @@ param(
  [string]$WdkPackage,
  [string]$WdkToolRoot,
  [string]$UmdfVersion='2.25',
- [string]$IddCxVersion='1.4'
+ [string]$IddCxVersion='1.9'
 )
 $ErrorActionPreference='Stop'
 if(Test-Path -LiteralPath $OutputDirectory){throw 'OutputDirectory must be new'}

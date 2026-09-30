@@ -7,7 +7,7 @@ param(
     [string]$TargetWdkPackage,
     [string]$WdkToolRoot,
     [ValidatePattern('^(2)\.\d+$')][string]$UmdfVersion='2.25',
-    [ValidatePattern('^(1)\.\d+$')][string]$IddCxVersion='1.4',
+    [ValidatePattern('^(1)\.\d+$')][string]$IddCxVersion='1.9',
     [ValidateSet('x64','ARM64')][string]$Platform='x64',
     [Parameter(Mandatory)][ValidatePattern('^[0-9A-Fa-f]{18}$')][string]$DeviceSerial,
     [string]$OutputDirectory,
