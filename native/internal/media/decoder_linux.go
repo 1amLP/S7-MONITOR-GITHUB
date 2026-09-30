@@ -43,6 +43,7 @@ type Decoder struct {
 	crop            Crop
 	memory          uint32
 	closed          bool
+	pendingPictures int
 }
 
 var quarantineMu sync.Mutex
@@ -177,6 +178,7 @@ func OpenDecoder(path string, first []byte, pts uint64) (d *Decoder, err error) 
 	if err = d.reclaimStartupConfig(time.Now().Add(time.Second)); err != nil {
 		return nil, err
 	}
+	d.pendingPictures = 0 // The startup SPS/PPS submission has no decoded picture.
 	if err = d.Submit(picture, pts); err != nil {
 		return nil, fmt.Errorf("submit initial IDR after capture setup: %w", err)
 	}
@@ -449,9 +451,24 @@ func (d *Decoder) Submit(data []byte, pts uint64) error {
 			return e
 		}
 		m.queued = true
+		d.pendingPictures++
 		return nil
 	}
 	return syscall.EAGAIN
+}
+
+// Called only by the decoder owner. Retired display leases wake it separately
+// so a static desktop does not need constant DQBUF polling to recycle DPBs.
+func (d *Decoder) DecodeWork() (bool, <-chan struct{}) {
+	if d.pendingPictures != 0 {
+		return true, d.releaseWake
+	}
+	for i := range d.output {
+		if d.output[i].queued {
+			return true, d.releaseWake
+		}
+	}
+	return false, d.releaseWake
 }
 func (d *Decoder) Drain(present func(Image) error) (int, error) {
 	return d.drain(present, false)
@@ -460,6 +477,7 @@ func (d *Decoder) DrainLatest(present func(Image) error) (int, error) {
 	return d.drain(present, true)
 }
 func (d *Decoder) drain(present func(Image) error, latest bool) (count int, err error) {
+	defer func() { d.pendingPictures = max(0, d.pendingPictures-count) }()
 	if d.closed {
 		return 0, os.ErrClosed
 	}

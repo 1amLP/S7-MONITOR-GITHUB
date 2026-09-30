@@ -42,12 +42,25 @@ type debugUSB struct {
 	input, output         *functionfs.Endpoint
 	inputDone, outputDone chan struct{}
 	jobs                  chan debugBulkJob
-	busy                  atomic.Bool
+	pending               atomic.Int32
 }
 
 type debugBulkJob struct {
 	command debugCommand
 	result  *debugResult
+}
+
+func (d *debugUSB) queueBulk(job debugBulkJob) bool {
+	// The host can receive the last byte before the writer returns from Write.
+	// Keep one next request instead of dropping it in that completion window.
+	d.pending.Add(1)
+	select {
+	case d.jobs <- job:
+		return true
+	default:
+		d.pending.Add(-1)
+		return false
+	}
 }
 
 func parseDebugBulkCommand(packet []byte) (debugCommand, error) {
@@ -186,16 +199,17 @@ func (d *debugUSB) readBulk(ctx context.Context) {
 			continue
 		}
 		c.Epoch = epoch
-		if !d.busy.CompareAndSwap(false, true) {
+		if d.pending.Load() != 0 && c.Kind == debugRecovery && d.allowUI {
 			// The old IN transfer may be abandoned forever. The independent OUT
 			// reader must still deliver an explicit Recovery to the UI owner.
-			if c.Kind == debugRecovery && d.allowUI {
-				select {
-				case d.ui.requests <- c:
-				default:
-				}
+			select {
+			case d.ui.requests <- c:
+			default:
 			}
 			continue
+		}
+		if len(d.jobs) == cap(d.jobs) {
+			continue // Reject extra pipelining before submitting any UI side effect.
 		}
 		job := debugBulkJob{command: c}
 		if c.Kind == 10 || c.Kind == 11 {
@@ -215,12 +229,7 @@ func (d *debugUSB) readBulk(ctx context.Context) {
 			r := debugErrorResult(seq, err)
 			job.result = &r
 		}
-		select {
-		case d.jobs <- job:
-		case <-ctx.Done():
-			d.busy.Store(false)
-			return
-		}
+		d.queueBulk(job)
 	}
 }
 
@@ -232,7 +241,7 @@ func (d *debugUSB) writeBulk(ctx context.Context) {
 			return
 		case job := <-d.jobs:
 			func() {
-				defer d.busy.Store(false)
+				defer d.pending.Add(-1)
 				r := job.result
 				until := time.Now().Add(10 * time.Second)
 				for r == nil && ctx.Err() == nil {

@@ -17,6 +17,7 @@
 #include "Encoder.h"
 #include "MonitorTrace.h"
 #include "DesktopReadback.h"
+#include "GpuFrame.h"
 #include "PresencePolicy.h"
 #include "FrameHandoff.h"
 #include "MonitorSlot.h"
@@ -60,6 +61,8 @@ class Worker {
     Handle pictureReady_=pictureEvent();
     FrameHandoff pictures_;
     uint64_t captureFirst_=0,captureLast_=0,captureCount_=0,captureUS_=0,captureMaxUS_=0;
+    uint64_t gpuFrames_=0,gpuPoolWaits_=0;
+    std::atomic<bool> gpuInput_{false};
     std::thread thread_; // Started last: every field touched by run() is initialized.
     static StreamKey streamKey(const Session::Snapshot& s){
         return {s.epoch,s.current.generation,s.current.fps,s.current.bitrate,s.current.gopSeconds,s.current.width,s.current.height};
@@ -70,7 +73,7 @@ class Worker {
     }
     // All MFT activation/pumping/submission/teardown and USB sends run here.
     // No IddCx surface or D3D immediate context crosses this thread boundary.
-    void transmit()noexcept{
+    void transmit(IMFDXGIDeviceManager* manager)noexcept{
         try{
             ComRuntime com;
             Handle timer(CreateWaitableTimerExW(nullptr,nullptr,0x2,TIMER_MODIFY_STATE|SYNCHRONIZE));
@@ -94,20 +97,21 @@ class Worker {
                             snapshot.current.fps,fps,static_cast<unsigned long>(failure),static_cast<unsigned long>(transport));
                         monitorEvent(detail,FAILED(transport)?transport:failure);
                     }
-                    pictures_.pause();encoder.reset();current=DesktopPicture{};applied={};
+                    gpuInput_=false;pictures_.pause();encoder.reset();current=DesktopPicture{};applied={};
                 }else if(microseconds()>=retryAt)try{
                     if(!encoder||applied!=key){
                         pictures_.pause();encoder.reset();current=DesktopPicture{};
                         applied=key;config=snapshot.current;keyRequest=config.keyRequest;
                         forceIDR=true;newPixels=false;nextFrame=lastSubmit=lastPTS=0;
-                        if(!pictures_.configure(key))throw Failure(E_INVALIDARG,"Invalid monitor stream identity");
                         auto usb=snapshot.usb;
                         encoder=std::make_unique<Encoder>(adapter_,config,[this,usb,config,key,ack=false](Bytes bytes,uint64_t pts,bool idr)mutable{
                             const auto live=session_->snapshot();
                             if(signaled(stop_.get())||!active(live,config.fps)||streamKey(live)!=key)return;
                             usb->send(config,bytes,pts,idr,stop_.get());
                             if(!ack){usb->status(config,2,S_OK,stop_.get());ack=true;}
-                        });
+                        },config.sniper?nullptr:manager);
+                        gpuInput_=encoder->gpuInput();
+                        if(!pictures_.configure(key))throw Failure(E_INVALIDARG,"Invalid monitor stream identity");
                         usb->status(config,1,S_OK,stop_.get());
                     }
                     if(keyRequest!=snapshot.current.keyRequest){keyRequest=snapshot.current.keyRequest;forceIDR=true;}
@@ -122,10 +126,11 @@ class Worker {
                         newPixels=pictures_.take(applied,now,current,forceIDR)||newPixels;
                         // A static-desktop refresh/IDR reuses pixels deliberately. Only a
                         // successful take is a NEW desktop picture, not the repeated sample.
-                        if(!current.pixels.empty()&&(newPixels||forceIDR||now-lastSubmit>=1000000)){
+                        if((current.gpu||!current.pixels.empty())&&(newPixels||forceIDR||now-lastSubmit>=1000000)){
                             const auto pts=samplePTS(newPixels,current.acquiredUS,now,lastPTS);
                             if(pts){
-                                encoder->submit(current.pixels,pts,forceIDR);
+                                if(current.gpu)encoder->submitGPU(current.gpu->allocation.Get(),pts,forceIDR);
+                                else encoder->submit(current.pixels,pts,forceIDR);
                                 forceIDR=false;newPixels=false;lastPTS=pts;pictures_.submitted(pts);lastSubmit=now;
                                 const uint64_t period=1000000/config.fps;
                                 nextFrame=(!nextFrame||now>=nextFrame+period)?now+period:nextFrame+period;
@@ -161,7 +166,7 @@ class Worker {
         catch(...){if(!signaled(stop_.get())){session_->failure=E_FAIL;monitorEvent("Unknown monitor transmitter failure",E_FAIL);}}
         pictures_.pause();
     }
-    void core(){
+    void core(std::thread& sender){
         ComRuntime com;
         DWORD task=0;HANDLE av=AvSetMmThreadCharacteristicsW(L"Distribution",&task);
         struct AvGuard{HANDLE h;~AvGuard(){if(h)AvRevertMmThreadCharacteristics(h);}} priority{av};
@@ -169,11 +174,15 @@ class Worker {
         check(CreateDXGIFactory2(0,IID_PPV_ARGS(&factory)),"Create render GPU factory");
         check(factory->EnumAdapterByLuid(adapter_,IID_PPV_ARGS(&adapter)),"Find swap-chain render GPU");
         ComPtr<ID3D11Device> device;ComPtr<ID3D11DeviceContext> context;
-        check(D3D11CreateDevice(adapter.Get(),D3D_DRIVER_TYPE_UNKNOWN,nullptr,D3D11_CREATE_DEVICE_BGRA_SUPPORT,nullptr,0,D3D11_SDK_VERSION,&device,nullptr,&context),"Create render GPU device");
+        check(D3D11CreateDevice(adapter.Get(),D3D_DRIVER_TYPE_UNKNOWN,nullptr,D3D11_CREATE_DEVICE_BGRA_SUPPORT|D3D11_CREATE_DEVICE_VIDEO_SUPPORT,nullptr,0,D3D11_SDK_VERSION,&device,nullptr,&context),"Create render GPU device");
         ComPtr<IDXGIDevice> dxgi;check(device.As(&dxgi),"Render DXGI device");
         IDARG_IN_SWAPCHAINSETDEVICE bind{};bind.pDevice=dxgi.Get();check(IddCxSwapChainSetDevice(chain_,&bind),"Bind IddCx swap-chain device");
         const auto initial=session_->snapshot().current;
         DesktopReadback readback(device.Get(),context.Get(),initial.width,initial.height);
+        std::shared_ptr<GpuFramePool> gpu;
+        try{gpu=std::make_shared<GpuFramePool>(device.Get(),context.Get(),initial.width,initial.height);}
+        catch(const Failure& e){monitorEvent("GPU surface pool unavailable; NV12 readback retained",e.code);}
+        sender=std::thread([this,gpu]{transmit(gpu?gpu->manager():nullptr);});
         DesktopPicture capture;
         std::unique_ptr<SniperChannel> primary;
         DWORD primarySession=0xffffffff;
@@ -191,7 +200,7 @@ class Worker {
         LARGE_INTEGER qpcFrequency{};wincheck(QueryPerformanceFrequency(&qpcFrequency),"Capture QPC frequency");
         uint64_t windowStart=microseconds(),acquires=0,unique=0,missingIds=0,duplicates=0;
         uint64_t desiredFirst=0,desiredLast=0,acquireMaxUS=0,lateMaxUS=0;
-        uint64_t reportedReadbacks=0,reportedReadbackUS=0;
+        uint64_t reportedReadbacks=0,reportedReadbackUS=0,reportedGPUFrames=0,reportedGPUWaits=0;
         UINT lastFrameNumber=0;bool haveFrameNumber=false;
         while(!signaled(stop_.get())){
             const auto snapshot=session_->snapshot();const auto key=streamKey(snapshot);
@@ -211,6 +220,12 @@ class Worker {
                     (unsigned long long)acquireMaxUS,(unsigned long long)lateMaxUS,
                     (unsigned long long)readbacks,(unsigned long long)(readbacks?(captureUS_-reportedReadbackUS)/readbacks:0));
                 monitorEvent(sample);windowStart=now;acquires=unique=missingIds=duplicates=0;
+                if(gpuInput_.load()){
+                    sprintf_s(sample,"Monitor GPU frames=%llu allocator_waits=%llu CPU_NV12_readbacks=%llu",(unsigned long long)(gpuFrames_-reportedGPUFrames),
+                        (unsigned long long)(gpuPoolWaits_-reportedGPUWaits),(unsigned long long)readbacks);
+                    monitorEvent(sample);
+                }
+                reportedGPUFrames=gpuFrames_;reportedGPUWaits=gpuPoolWaits_;
                 reportedReadbacks=captureCount_;reportedReadbackUS=captureUS_;
                 desiredFirst=desiredLast=acquireMaxUS=lateMaxUS=0;
             }
@@ -265,13 +280,15 @@ class Worker {
 			// its codec. No retimestamping: it can later serve an explicit IDR,
 			// but a frame older than two 60 Hz periods cannot masquerade as fresh.
             if(captureWaiting){
-                if(!streaming||capture.key!=key||now<capture.acquiredUS)captureWaiting=false;
+                if(!streaming||capture.key!=key||now<capture.acquiredUS||bool(capture.gpu)!=(gpuInput_.load()&&!sniper)){
+                    captureWaiting=false;capture.gpu.reset();
+                }
                 else if(pictures_.publish(capture)){captureWaiting=false;SetEvent(pictureReady_.get());}
             }
             auto drainCopy=[&]{
                 if(!copyPending)return;
                 const auto completed=microseconds();
-                const bool keep=streaming&&!sniper&&copyKey==key&&completed>=copyTime;
+                const bool keep=streaming&&!sniper&&!gpuInput_.load()&&copyKey==key&&completed>=copyTime;
                 if(readback.poll(keep?&capture.pixels:nullptr)){
                     if(keep){
                         if(!captureCount_)captureFirst_=copyTime;
@@ -319,20 +336,36 @@ class Worker {
                    (description.Format!=DXGI_FORMAT_B8G8R8A8_UNORM&&description.Format!=DXGI_FORMAT_B8G8R8A8_UNORM_SRGB))
                     throw Failure(E_NOTIMPL,"Desktop differs from advertised S7 monitor mode");
             }
+            bool gpuStarved=false;
             if(desktop&&!copyPending){
                 if(streaming&&!sniper&&desktopKey==key){
-                    readback.submit(desktop.Get());
-                    copyPending=true;copyKey=desktopKey;copyTime=desktopTime;
+                    if(gpu&&gpuInput_.load()){
+                        capture.gpu.reset();capture.pixels.clear();
+                        capture.gpu=gpu->convert(desktop.Get());
+                        if(!capture.gpu){
+                            gpuStarved=true;++gpuPoolWaits_;
+                            if(microseconds()-desktopTime>1000000)throw Failure(HRESULT_FROM_WIN32(ERROR_TIMEOUT),"GPU samples were not returned for one second");
+                        }else{
+                            ++gpuFrames_;capture.key=desktopKey;capture.acquiredUS=desktopTime;
+                            captureWaiting=!pictures_.publish(capture);
+                            if(!captureWaiting)SetEvent(pictureReady_.get());
+                        }
+                    }else{
+                        capture.gpu.reset();readback.submit(desktop.Get());
+                        copyPending=true;copyKey=desktopKey;copyTime=desktopTime;
+                    }
                 }
-                desktop.Reset();check(IddCxSwapChainFinishedProcessingFrame(chain_),"Finish desktop GPU submission");
+                if(!gpuStarved){
+                    desktop.Reset();check(IddCxSwapChainFinishedProcessingFrame(chain_),"Finish desktop GPU submission");
                 // ReleaseAndAcquire also releases when it returns E_PENDING.
                 // Do that immediately, not after a timer or staging Map succeeds.
-                continue;
+                    continue;
+                }
             }
             drainCopy();
-            if(desktop&&!copyPending)continue;
+            if(desktop&&!copyPending&&!gpuStarved)continue;
             HANDLE waits[]={stop_.get(),desktop?readbackTimer.get():available_,readbackTimer.get()};
-            const bool pending=copyPending||captureWaiting||sniper;
+            const bool pending=copyPending||captureWaiting||sniper||gpuStarved;
             if(pending){
                 LARGE_INTEGER due{};due.QuadPart=sniper?-LONGLONG(sniperWait(primaryPoll,microseconds(),copyPending)*10):(copyPending?-10000:-20000);
                 wincheck(SetWaitableTimer(readbackTimer.get(),&due,0,nullptr,nullptr,FALSE),"Wait for pending GPU copy");
@@ -343,7 +376,7 @@ class Worker {
     }
     void run()noexcept{
         std::thread sender;
-        try{sender=std::thread([this]{transmit();});core();}
+        try{core(sender);}
         catch(const Failure& e){if(!signaled(stop_.get())){session_->failure=e.code;monitorEvent(e.what(),e.code);}}
         catch(const std::exception& e){if(!signaled(stop_.get())){session_->failure=E_FAIL;monitorEvent(e.what(),E_FAIL);}}
         catch(...){if(!signaled(stop_.get())){session_->failure=E_FAIL;monitorEvent("Unknown swap-chain failure",E_FAIL);}}

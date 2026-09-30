@@ -58,8 +58,9 @@ func matchEncoderKernel(system, release, machine string) error {
 	// These revisions have MFC tree ee4d34a7c94c8b7cbcb3d30570152b91df8b60e6
 	// and identical V4L2 UAPI, videobuf2, ION and arm64 headers. Other kernels
 	// remain rejected; runtime format/control/queue checks are still mandatory.
+	// MFCCacheFix changes decoder source synchronization, not the encoder ABI.
 	if system == "Linux" && machine == "aarch64" {
-		for _, prefix := range []string{kernelpin.Baseline, kernelpin.LegacyCamera, kernelpin.USBWakeupFix} {
+		for _, prefix := range []string{kernelpin.Baseline, kernelpin.LegacyCamera, kernelpin.USBWakeupFix, kernelpin.MFCCacheFix} {
 			if release == prefix || strings.HasPrefix(release, prefix+"-") {
 				return nil
 			}

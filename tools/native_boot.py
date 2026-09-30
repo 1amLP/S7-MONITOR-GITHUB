@@ -23,6 +23,7 @@ INPUT_SHA = '6544f30ceb74fda8be35d55664dd3570bdd5a00f453594ed1d488dab7c54233e'
 KERNEL_SHA = '7d73f82eac469c5dc1e141d5ec0f28f208a0c91449ff85acc868f5a1f2dfbc01'
 DTB_SHA = '0c180a7249d70e7a4623a7a977a5f552670aa978fe981b992557e77c5349318a'
 KERNEL_FIX_SOURCE = 'fd26b7e36c450e723a8f4945a0506432bc7501f9'
+KERNEL_PERF_SOURCE = '3dfe42cdf48ca3e3ce53f7b4d0170b7edebd16b2'
 KERNEL_FIX_CONFIG = '421cdaa115acbed46f60d57ef5e08a9559485788df31c04d8cb19dfeed803db3'
 
 
@@ -36,9 +37,9 @@ def load_kernel_replacement(image: Path | None, pin_path: Path | None):
     pin = json.loads(pin_path.read_text())
     if (pin.get('schema') != 'S7_KERNEL_REPLACEMENT_1' or
             pin.get('baseline_kernel_sha256') != KERNEL_SHA or
-            pin.get('source_commit') != KERNEL_FIX_SOURCE or
+            pin.get('source_commit') not in (KERNEL_FIX_SOURCE, KERNEL_PERF_SOURCE) or
             pin.get('configuration_sha256') != KERNEL_FIX_CONFIG or
-            pin.get('kernel_release') != '3.18.140-g' + KERNEL_FIX_SOURCE[:12]):
+            pin.get('kernel_release') != '3.18.140-g' + pin['source_commit'][:12]):
         raise ValueError('kernel replacement source/configuration pin mismatch')
     data = image.read_bytes()
     if (sha(data) != pin.get('kernel_sha256') or data[56:60] != b'ARMd' or

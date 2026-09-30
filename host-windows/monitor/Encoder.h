@@ -25,6 +25,8 @@ class Encoder {
     ComPtr<IMFMediaEventGenerator> events_;
     ComPtr<ICodecAPI> codec_;
     ComPtr<IMFShutdown> shutdown_;
+    ComPtr<IMFDXGIDeviceManager> manager_;
+    bool gpuInput_=false;
     AnnexB annex_;
     Config config_;
     DWORD input_=0,output_=0;
@@ -37,19 +39,22 @@ class Encoder {
     uint64_t inputCount_=0,outputCount_=0,firstInput_=0,lastInput_=0,firstOutput_=0,lastOutput_=0;
     uint64_t submitUS_=0,outputUS_=0,usbUS_=0,maxSubmitUS_=0,maxOutputUS_=0,maxUSBUS_=0;
     std::function<void(Bytes,uint64_t,bool)> sink_;
-    void open(IMFActivate* activation);
+    void open(IMFActivate* activation,bool gpu);
     bool close()noexcept;
     void drain();
     void header();
     void output(bool discard=false);
     void property(const GUID& id,uint32_t value,bool required);
+    void submitSample(IMFSample* sample,uint64_t pts,bool forceIDR,uint64_t started);
 public:
-    Encoder(LUID adapter,Config config,std::function<void(Bytes,uint64_t,bool)> sink);
+    Encoder(LUID adapter,Config config,std::function<void(Bytes,uint64_t,bool)> sink,IMFDXGIDeviceManager* manager=nullptr);
     ~Encoder(){close();}
     Encoder(const Encoder&)=delete;Encoder& operator=(const Encoder&)=delete;
     void pump();
     bool ready()const{return credits_>0&&inFlight_<2;}
     void submit(const Bytes& nv12,uint64_t pts,bool forceIDR);
+    void submitGPU(IMFSample* allocation,uint64_t pts,bool forceIDR);
+    bool gpuInput()const{return gpuInput_;}
     const Config& config()const{return config_;}
 };
 }

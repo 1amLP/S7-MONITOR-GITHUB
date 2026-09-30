@@ -10,6 +10,7 @@ struct EncoderLifetime {
     ComPtr<IMFActivate> activation;
     ComPtr<IMFTransform> transform;
     ComPtr<IMFShutdown> shutdown;
+    ComPtr<IMFDXGIDeviceManager> manager;
     ComPtr<IMFMediaEventGenerator> events;
     ComPtr<ICodecAPI> codec;
     std::atomic<bool> released{false};
@@ -33,7 +34,7 @@ static ComPtr<IMFMediaType> mediaType(GUID subtype,const Config& c){
     check(type->SetUINT32(MF_MT_YUV_MATRIX,MFVideoTransferMatrix_BT709),"BT.709 matrix");
     check(type->SetUINT32(MF_MT_VIDEO_NOMINAL_RANGE,MFNominalRange_16_235),"Video range");return type;
 }
-Encoder::Encoder(LUID adapter,Config config,std::function<void(Bytes,uint64_t,bool)> sink):config_(config),sink_(std::move(sink)){
+Encoder::Encoder(LUID adapter,Config config,std::function<void(Bytes,uint64_t,bool)> sink,IMFDXGIDeviceManager* manager):manager_(manager),config_(config),sink_(std::move(sink)){
     try{
         ComPtr<IMFAttributes> filter;check(MFCreateAttributes(&filter,1),"MFT adapter filter");
         check(filter->SetBlob(MFT_ENUM_ADAPTER_LUID,reinterpret_cast<UINT8*>(&adapter),sizeof(adapter)),"MFT adapter LUID");
@@ -42,7 +43,7 @@ Encoder::Encoder(LUID adapter,Config config,std::function<void(Bytes,uint64_t,bo
         check(MFTEnum2(MFT_CATEGORY_VIDEO_ENCODER,MFT_ENUM_FLAG_HARDWARE|MFT_ENUM_FLAG_SORTANDFILTER,&input,&output,filter.Get(),&list,&count),"Enumerate hardware H.264 encoders on render GPU");
         struct List {IMFActivate** p;UINT32 count;~List(){for(UINT32 i=0;i<count;i++)p[i]->Release();CoTaskMemFree(p);}}cleanup{list,count};
         HRESULT last=MF_E_TOPO_CODEC_NOT_FOUND;
-        for(UINT32 i=0;i<count;i++){
+        for(unsigned attempt=manager_?0u:1u;attempt<2;++attempt)for(UINT32 i=0;i<count;i++){
             auto owner=std::make_shared<EncoderLifetime>();
             const auto deadline=GetTickCount64()+750;
             while(!encoderLease().acquire(owner)){
@@ -50,7 +51,7 @@ Encoder::Encoder(LUID adapter,Config config,std::function<void(Bytes,uint64_t,bo
                 Sleep(2);
             }
             lifetime_=owner;
-            try{open(list[i]);lastProgress_=microseconds();return;}
+            try{open(list[i],attempt==0);lastProgress_=microseconds();return;}
             catch(const Failure& e){last=e.code;monitorEvent(e.what(),e.code);if(!close())throw Failure(HRESULT_FROM_WIN32(ERROR_IO_INCOMPLETE),"Hardware encoder cleanup retained its owner");}
         }
         throw Failure(last,"No hardware H.264 encoder accepted low-latency NV12 mode (no software fallback)");
@@ -61,7 +62,7 @@ void Encoder::property(const GUID& id,uint32_t value,bool required){
     VARIANT v;VariantInit(&v);v.vt=VT_UI4;v.ulVal=value;HRESULT hr=codec_->SetValue(&id,&v);
     if(required)check(hr,"Apply encoder control");else if(FAILED(hr))log("Optional encoder control rejected",hr);
 }
-void Encoder::open(IMFActivate* activation){
+void Encoder::open(IMFActivate* activation,bool gpu){
     activation_=activation;
     check(activation->ActivateObject(IID_PPV_ARGS(&transform_)),"Activate hardware encoder");
     ComPtr<IMFAttributes> attr;check(transform_->GetAttributes(&attr),"Encoder attributes");UINT32 async=0;check(attr->GetUINT32(MF_TRANSFORM_ASYNC,&async),"Hardware MFT asynchronous flag");
@@ -70,6 +71,12 @@ void Encoder::open(IMFActivate* activation){
     check(attr->SetUINT32(MF_LOW_LATENCY,TRUE),"Encoder low latency attribute");
     check(transform_.As(&events_),"MFT event generator");check(transform_.As(&codec_),"Encoder codec controls");
     check(transform_.As(&shutdown_),"Asynchronous encoder shutdown interface");
+    UINT32 aware=FALSE;gpuInput_=false;
+    if(gpu&&manager_&&SUCCEEDED(attr->GetUINT32(MF_SA_D3D11_AWARE,&aware))&&aware){
+        check(transform_->ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER,reinterpret_cast<ULONG_PTR>(manager_.Get())),"Attach GPU encoder device manager");
+        gpuInput_=true;
+    }
+    monitorEvent(gpuInput_?"Monitor encoder input: retained D3D11 NV12 textures":"Monitor encoder input: NV12 memory");
     DWORD inCount=0,outCount=0;check(transform_->GetStreamCount(&inCount,&outCount),"Encoder stream count");if(inCount!=1||outCount!=1)throw Failure(E_NOTIMPL,"Unexpected encoder streams");
     HRESULT ids=transform_->GetStreamIDs(1,&input_,1,&output_);if(ids==E_NOTIMPL){input_=output_=0;}else check(ids,"Encoder stream IDs");
     property(CODECAPI_AVEncCommonRateControlMode,eAVEncCommonRateControlMode_CBR,true);
@@ -101,14 +108,30 @@ void Encoder::header(){
 void Encoder::submit(const Bytes& nv12,uint64_t pts,bool forceIDR){
     const auto started=microseconds();
     if(!ready()||nv12.size()!=size_t(config_.width)*config_.height*3/2)throw Failure(E_INVALIDARG,"Encoder input state/size");
-    if(forceIDR||requestRecoveryIDR_){property(CODECAPI_AVEncVideoForceKeyFrame,1,true);requestRecoveryIDR_=false;}
     ComPtr<IMFSample> sample;ComPtr<IMFMediaBuffer> buffer;
     check(MFCreateSample(&sample),"Encoder input sample");check(MFCreateMemoryBuffer(DWORD(nv12.size()),&buffer),"Encoder input buffer");
     BYTE* p=nullptr;check(buffer->Lock(&p,nullptr,nullptr),"Lock NV12 input");std::memcpy(p,nv12.data(),nv12.size());check(buffer->Unlock(),"Unlock NV12 input");
     check(buffer->SetCurrentLength(DWORD(nv12.size())),"NV12 input length");check(sample->AddBuffer(buffer.Get()),"NV12 sample buffer");
+    submitSample(sample.Get(),pts,forceIDR,started);
+}
+void Encoder::submitGPU(IMFSample* allocation,uint64_t pts,bool forceIDR){
+    const auto started=microseconds();
+    if(!ready()||!gpuInput_||!allocation)throw Failure(E_INVALIDARG,"GPU encoder input state");
+    // Static-desktop IDR reuses immutable pixels, never a sample's timestamps.
+    // Keep the allocator sample alive for the complete MFT input lifetime.
+    static constexpr GUID ownerKey={0x90487774,0xc642,0x4ec5,{0xae,0x47,0x79,0x23,0x0d,0x82,0x78,0x74}};
+    ComPtr<IMFSample> sample;ComPtr<IMFMediaBuffer> buffer;
+    check(MFCreateSample(&sample),"GPU input sample");
+    check(allocation->GetBufferByIndex(0,&buffer),"GPU input buffer");
+    check(sample->AddBuffer(buffer.Get()),"GPU sample buffer");
+    check(sample->SetUnknown(ownerKey,allocation),"Retain GPU allocator sample");
+    submitSample(sample.Get(),pts,forceIDR,started);
+}
+void Encoder::submitSample(IMFSample* sample,uint64_t pts,bool forceIDR,uint64_t started){
+    if(forceIDR||requestRecoveryIDR_){property(CODECAPI_AVEncVideoForceKeyFrame,1,true);requestRecoveryIDR_=false;}
     if(pts>uint64_t(INT64_MAX/10))throw Failure(E_INVALIDARG,"Encoder timestamp overflow");
     check(sample->SetSampleTime(LONGLONG(pts*10)),"Encoder sample timestamp");check(sample->SetSampleDuration(10000000/config_.fps),"Encoder sample duration");
-    check(transform_->ProcessInput(input_,sample.Get(),0),"Hardware encode input");credits_--;if(inFlight_++==0)lastProgress_=microseconds();
+    check(transform_->ProcessInput(input_,sample,0),"Hardware encode input");credits_--;if(inFlight_++==0)lastProgress_=microseconds();
     const auto finished=microseconds();
     if(!inputCount_)firstInput_=started;++inputCount_;lastInput_=started;
     submitUS_+=finished-started;maxSubmitUS_=std::max(maxSubmitUS_,finished-started);
@@ -206,6 +229,7 @@ bool Encoder::close()noexcept{
         complete=SUCCEEDED(activation_->ShutdownObject());
     }
     auto owner=lifetime_;
+    owner->manager=manager_;
     owner->activation=activation_;owner->transform=transform_;owner->shutdown=shutdown_;owner->events=events_;owner->codec=codec_;owner->complete=complete;
     owner->released.store(true);
     codec_.Reset();events_.Reset();shutdown_.Reset();transform_.Reset();activation_.Reset();streaming_=false;

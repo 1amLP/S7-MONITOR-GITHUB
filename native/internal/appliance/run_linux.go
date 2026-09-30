@@ -1724,13 +1724,44 @@ func (u *UI) decode(ctx context.Context) {
 		}
 		return true, true
 	}
-	tick := time.NewTicker(5 * time.Millisecond)
-	defer tick.Stop()
+	wait := time.NewTimer(0)
+	defer wait.Stop()
 	for {
+		delay := 5 * time.Millisecond // Compatibility backend without work signals.
+		var retired <-chan struct{}
+		if native, ok := d.(interface {
+			DecodeWork() (bool, <-chan struct{})
+		}); ok {
+			busy, release := native.DecodeWork()
+			retired = release
+			delay = 250 * time.Millisecond
+			if busy || pending != nil {
+				delay = 2 * time.Millisecond
+			}
+		} else if d == nil && pending == nil {
+			delay = 250 * time.Millisecond
+		}
+		frames := s.frames
+		if pending != nil || latched || time.Now().Before(retryAt) {
+			frames = nil // Never replace a dependent compressed frame.
+		}
+		var arrived *monitor.Frame
+		changed := s.monitorWake()
+		if !wait.Stop() {
+			select {
+			case <-wait.C:
+			default:
+			}
+		}
+		wait.Reset(delay)
 		select {
 		case <-ctx.Done():
 			return
-		case <-tick.C:
+		case frame := <-frames:
+			arrived = &frame
+		case <-changed:
+		case <-retired:
+		case <-wait.C:
 		}
 		cfg, gen, _ := s.Current()
 		s.mu.Lock()
@@ -1762,6 +1793,9 @@ func (u *UI) decode(ctx context.Context) {
 		}
 		if !runnable || latched || u.device == "" || u.screen == nil || time.Now().Before(retryAt) {
 			continue
+		}
+		if arrived != nil {
+			pending = arrived
 		}
 		if d != nil {
 			drain := d.Drain

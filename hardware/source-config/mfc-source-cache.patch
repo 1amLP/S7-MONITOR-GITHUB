@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Original driver: Copyright (c) 2010 Samsung Electronics Co., Ltd.
+# Apply to the pinned wakeup-fix tree with git apply --unidiff-zero.
+diff --git a/drivers/media/platform/exynos/mfc/s5p_mfc_dec.c b/drivers/media/platform/exynos/mfc/s5p_mfc_dec.c
+--- a/drivers/media/platform/exynos/mfc/s5p_mfc_dec.c
++++ b/drivers/media/platform/exynos/mfc/s5p_mfc_dec.c
+@@ -2121 +2121,6 @@ static int s5p_mfc_buf_prepare(struct vb2_buffer *vb)
+-	s5p_mfc_mem_prepare(vb);
++	/* H.264 bitstream DMA reads bytesused, not the whole source allocation. */
++	if (vq->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE &&
++			!ctx->is_drm && ctx->src_fmt->fourcc == V4L2_PIX_FMT_H264)
++		vb2_ion_buf_prepare_exact(vb);
++	else
++		s5p_mfc_mem_prepare(vb);
+@@ -2145 +2150,5 @@ static void s5p_mfc_buf_finish(struct vb2_buffer *vb)
+-	s5p_mfc_mem_finish(vb);
++	if (vq->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE &&
++			!ctx->is_drm && ctx->src_fmt->fourcc == V4L2_PIX_FMT_H264)
++		vb2_ion_buf_finish_exact(vb);
++	else
++		s5p_mfc_mem_finish(vb);

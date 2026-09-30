@@ -3,10 +3,12 @@
 #include <cstdint>
 #include <cstddef>
 #include <mutex>
+#include <memory>
 #include <utility>
 #include <vector>
 
 namespace s7 {
+struct GpuFrame;
 // Only uncompressed, independent NV12 pictures may be coalesced here. Encoded
 // H.264 access units must stay ordered: dropping a P frame breaks its references.
 struct StreamKey {
@@ -26,6 +28,7 @@ struct DesktopPicture {
     StreamKey key{};
     uint64_t acquiredUS=0;
     std::vector<uint8_t> pixels;
+    std::shared_ptr<GpuFrame> gpu;
 };
 struct HandoffStats {
     uint64_t published=0, taken=0, replaced=0, stale=0, refreshed=0, rejected=0, cleared=0;
@@ -41,6 +44,7 @@ class FrameHandoff {
     void clearLocked(){
         if(stats_.pending){++stats_.cleared;stats_.pending=0;}
         pending_.acquiredUS=0;
+        pending_.gpu.reset();
     }
 public:
     static constexpr std::size_t PictureBytes=1280*720*3/2;
@@ -58,7 +62,8 @@ public:
     void close(){std::lock_guard<std::mutex> lock(mutex_);clearLocked();active_=false;closed_=true;}
     bool publish(DesktopPicture& picture){
         std::lock_guard<std::mutex> lock(mutex_);
-        if(closed_||!active_||picture.key!=key_||picture.pixels.size()!=size_t(key_.width)*key_.height*3/2||
+        if(closed_||!active_||picture.key!=key_||
+           (picture.gpu?!picture.pixels.empty():picture.pixels.size()!=size_t(key_.width)*key_.height*3/2)||
            !picture.acquiredUS||picture.acquiredUS<=newestUS_){++stats_.rejected;return false;}
         if(stats_.pending)++stats_.replaced;
         newestUS_=picture.acquiredUS;
@@ -77,6 +82,7 @@ public:
         // changing its acquisition time or counting it as a fresh picture.
         if(old)++stats_.refreshed;else ++stats_.taken;
         std::swap(pending_,picture);stats_.pending=0;pending_.acquiredUS=0;
+        pending_.gpu.reset();
         return true;
     }
     void submitted(uint64_t pts){

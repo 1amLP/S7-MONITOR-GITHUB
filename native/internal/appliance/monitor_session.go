@@ -4,6 +4,15 @@ import "context"
 
 type monitorContextKey struct{}
 
+func (s *State) monitorWake() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.monitorChange == nil {
+		s.monitorChange = make(chan struct{})
+	}
+	return s.monitorChange
+}
+
 // Called with state.mu. Invalidation is a channel close, never a vendor call
 // under the state lock. USB, thermal and input readers remain nonblocking.
 func (s *State) invalidateMonitorLocked() {
