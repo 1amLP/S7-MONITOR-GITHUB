@@ -25,7 +25,7 @@ PowerShell 7.2, TWRP и законно полученные файлы свое�
 Из каталога `native`:
 
 ```sh
-go build -trimpath -buildvcs=false \
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -buildvcs=false \
   -ldflags '-X perimode/native/internal/appliance.PinnedSerial=<SERIAL>' \
   -o <OUTPUT_OUTSIDE_REPO>/s7-native ./cmd/s7-native
 ```
@@ -67,14 +67,20 @@ python3 tools/native_boot.py \
 Сборщик не прошивает устройство. Собранный BOOT содержит полученные вами
 firmware-входы и поэтому не должен попадать в GitHub.
 
-Для исправленного DWC3 ядра добавьте `--kernel-image <PINNED_KERNEL_IMAGE>`
-и `--kernel-pin hardware/source-config/kernel-usb-wakeup.json`. Сборщик
+Для текущего ядра с исправлением DWC3 и оптимизацией MFC добавьте
+`--kernel-image <PINNED_KERNEL_IMAGE>` и
+`--kernel-pin hardware/source-config/kernel-mfc-cache.json`. Сборщик
 проверяет исходный commit, конфигурацию, SHA-256, ARM64 header и строку
 kernel release. В отчёте должно быть `dtb_unchanged=true`; поле
 `kernel_and_dtb_unchanged` в этом случае равно `false`.
 В Git есть патч и пин, но нет бинарного ядра. Другая самостоятельная сборка
 может иметь другой хеш: существующий пин не подтверждает её совместимость.
 Не заменяйте хеши только ради обхода защиты.
+`hardware/source-config/mfc-source-cache.patch` применяется поверх дерева
+с исправлением DWC3 через `git apply --unidiff-zero`. Он меняет только
+синхронизацию сжатого входа H.264: по `bytesused`, а не по всему выделению.
+Несжатые CAPTURE-буферы, DRM и энкодер камеры не меняются. Старый пин
+`kernel-usb-wakeup.json` сохранён для воспроизведения предыдущей версии.
 Исходное ядро сохранено для сравнения и отката. В нём воспроизведён panic
 при отсутствующем `resume` callback; его не считать исправленным вариантом.
 

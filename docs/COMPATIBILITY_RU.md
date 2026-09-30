@@ -9,10 +9,15 @@
   `6544f30ceb74fda8be35d55664dd3570bdd5a00f453594ed1d488dab7c54233e`.
 - Ядро: `7d73f82eac469c5dc1e141d5ec0f28f208a0c91449ff85acc868f5a1f2dfbc01`.
 - DTB: `0c180a7249d70e7a4623a7a977a5f552670aa978fe981b992557e77c5349318a`.
-- Исправленное и загруженное ядро: `3.18.140-gfd26b7e36c45`. SHA-256
+- Предыдущее ядро с исправлением DWC3: `3.18.140-gfd26b7e36c45`. SHA-256
   `dad80632e86cd915c28cce6040d50edc1f05dfa7cb6d5c9795d8c22cdb7d91cc`.
   Пин исходников и конфигурации: `hardware/source-config/kernel-usb-wakeup.json`.
   Патч: `hardware/source-config/dwc3-wakeup.patch`. DTB не менялся.
+- Текущее загруженное ядро с оптимизацией MFC: `3.18.140-g3dfe42cdf48c`.
+  SHA-256 `1a9e09deafe49e510ce5ca8aece2a6759d6bcc52c2c326ffc2261ac446519b17`.
+  Пин: `hardware/source-config/kernel-mfc-cache.json`.
+  Дополнительный патч: `hardware/source-config/mfc-source-cache.patch`.
+  Исправление DWC3 сохранено, DTB не менялся.
 
 Хеши проверяют **входы этой конкретной сборки**. Они не означают поддержку
 любого телефона с маркировкой S7. Серийный номер проверенного экземпляра

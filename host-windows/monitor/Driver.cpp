@@ -72,7 +72,8 @@ class Worker {
                SUCCEEDED(session_->failure.load())&&SUCCEEDED(session_->transportFailure.load());
     }
     // All MFT activation/pumping/submission/teardown and USB sends run here.
-    // No IddCx surface or D3D immediate context crosses this thread boundary.
+    // No compositor surface crosses this boundary. The GPU pool enables D3D
+    // multithread protection for the device manager shared with the MFT.
     void transmit(IMFDXGIDeviceManager* manager)noexcept{
         try{
             ComRuntime com;
@@ -173,6 +174,11 @@ class Worker {
         ComPtr<IDXGIFactory4> factory;ComPtr<IDXGIAdapter1> adapter;
         check(CreateDXGIFactory2(0,IID_PPV_ARGS(&factory)),"Create render GPU factory");
         check(factory->EnumAdapterByLuid(adapter_,IID_PPV_ARGS(&adapter)),"Find swap-chain render GPU");
+        DXGI_ADAPTER_DESC1 renderInfo{};check(adapter->GetDesc1(&renderInfo),"Render GPU identity");
+        char identity[256]{};
+        _snprintf_s(identity,sizeof(identity),_TRUNCATE,"Monitor render GPU=%ls luid=%08lx:%08lx MMCSS=%u",renderInfo.Description,
+            static_cast<unsigned long>(adapter_.HighPart),static_cast<unsigned long>(adapter_.LowPart),av?1u:0u);
+        monitorEvent(identity);
         ComPtr<ID3D11Device> device;ComPtr<ID3D11DeviceContext> context;
         check(D3D11CreateDevice(adapter.Get(),D3D_DRIVER_TYPE_UNKNOWN,nullptr,D3D11_CREATE_DEVICE_BGRA_SUPPORT|D3D11_CREATE_DEVICE_VIDEO_SUPPORT,nullptr,0,D3D11_SDK_VERSION,&device,nullptr,&context),"Create render GPU device");
         ComPtr<IDXGIDevice> dxgi;check(device.As(&dxgi),"Render DXGI device");
@@ -201,6 +207,9 @@ class Worker {
         uint64_t windowStart=microseconds(),acquires=0,unique=0,missingIds=0,duplicates=0;
         uint64_t desiredFirst=0,desiredLast=0,acquireMaxUS=0,lateMaxUS=0;
         uint64_t reportedReadbacks=0,reportedReadbackUS=0,reportedGPUFrames=0,reportedGPUWaits=0;
+        uint64_t convertCount=0,convertUS=0,convertMaxUS=0,finishMaxUS=0;
+        uint64_t wakeEvents=0,wakeTimeouts=0,timeoutFrames=0,waitMaxUS=0;
+        bool afterTimeout=false;
         UINT lastFrameNumber=0;bool haveFrameNumber=false;
         while(!signaled(stop_.get())){
             const auto snapshot=session_->snapshot();const auto key=streamKey(snapshot);
@@ -225,6 +234,13 @@ class Worker {
                         (unsigned long long)(gpuPoolWaits_-reportedGPUWaits),(unsigned long long)readbacks);
                     monitorEvent(sample);
                 }
+                _snprintf_s(sample,sizeof(sample),_TRUNCATE,
+                    "Capture work convert_count=%llu convert_mean_us=%llu convert_max_us=%llu finish_max_us=%llu frame_events=%llu wait_timeouts=%llu frames_after_timeout=%llu wait_max_us=%llu",
+                    (unsigned long long)convertCount,(unsigned long long)(convertCount?convertUS/convertCount:0),(unsigned long long)convertMaxUS,
+                    (unsigned long long)finishMaxUS,(unsigned long long)wakeEvents,(unsigned long long)wakeTimeouts,
+                    (unsigned long long)timeoutFrames,(unsigned long long)waitMaxUS);
+                monitorEvent(sample);
+                convertCount=convertUS=convertMaxUS=finishMaxUS=wakeEvents=wakeTimeouts=timeoutFrames=waitMaxUS=0;
                 reportedGPUFrames=gpuFrames_;reportedGPUWaits=gpuPoolWaits_;
                 reportedReadbacks=captureCount_;reportedReadbackUS=captureUS_;
                 desiredFirst=desiredLast=acquireMaxUS=lateMaxUS=0;
@@ -311,6 +327,7 @@ class Worker {
             HRESULT result=desktop?E_PENDING:IddCxSwapChainReleaseAndAcquireBuffer(chain_,&acquired);
             if(result!=E_PENDING){
                 check(result,"Acquire desktop frame");
+                if(afterTimeout)++timeoutFrames;
                 ComPtr<IDXGIResource> resource;resource.Attach(acquired.MetaData.pSurface);
                 check(resource.As(&desktop),"Desktop texture");
                 desktopKey=key;desktopTime=microseconds();
@@ -336,12 +353,16 @@ class Worker {
                    (description.Format!=DXGI_FORMAT_B8G8R8A8_UNORM&&description.Format!=DXGI_FORMAT_B8G8R8A8_UNORM_SRGB))
                     throw Failure(E_NOTIMPL,"Desktop differs from advertised S7 monitor mode");
             }
+            afterTimeout=false;
             bool gpuStarved=false;
             if(desktop&&!copyPending){
                 if(streaming&&!sniper&&desktopKey==key){
                     if(gpu&&gpuInput_.load()){
                         capture.gpu.reset();capture.pixels.clear();
+                        const auto convertStart=microseconds();
                         capture.gpu=gpu->convert(desktop.Get());
+                        const auto elapsed=microseconds()-convertStart;
+                        ++convertCount;convertUS+=elapsed;convertMaxUS=std::max(convertMaxUS,elapsed);
                         if(!capture.gpu){
                             gpuStarved=true;++gpuPoolWaits_;
                             if(microseconds()-desktopTime>1000000)throw Failure(HRESULT_FROM_WIN32(ERROR_TIMEOUT),"GPU samples were not returned for one second");
@@ -356,7 +377,9 @@ class Worker {
                     }
                 }
                 if(!gpuStarved){
-                    desktop.Reset();check(IddCxSwapChainFinishedProcessingFrame(chain_),"Finish desktop GPU submission");
+                    desktop.Reset();const auto finishStart=microseconds();
+                    check(IddCxSwapChainFinishedProcessingFrame(chain_),"Finish desktop GPU submission");
+                    finishMaxUS=std::max(finishMaxUS,microseconds()-finishStart);
                 // ReleaseAndAcquire also releases when it returns E_PENDING.
                 // Do that immediately, not after a timer or staging Map succeeds.
                     continue;
@@ -370,7 +393,13 @@ class Worker {
                 LARGE_INTEGER due{};due.QuadPart=sniper?-LONGLONG(sniperWait(primaryPoll,microseconds(),copyPending)*10):(copyPending?-10000:-20000);
                 wincheck(SetWaitableTimer(readbackTimer.get(),&due,0,nullptr,nullptr,FALSE),"Wait for pending GPU copy");
             }
-            DWORD wait=WaitForMultipleObjects(desktop?2:(pending?3:2),waits,FALSE,pending?INFINITE:50);
+            const auto waitStart=microseconds();
+            // Match the IddCx sample's frame-period retry while streaming. A
+            // missed/coalesced notification must not impose a 50 ms pause.
+            DWORD wait=WaitForMultipleObjects(desktop?2:(pending?3:2),waits,FALSE,pending?INFINITE:(streaming?16:50));
+            waitMaxUS=std::max(waitMaxUS,microseconds()-waitStart);
+            if(wait==WAIT_TIMEOUT){++wakeTimeouts;afterTimeout=true;}
+            else if(!desktop&&wait==WAIT_OBJECT_0+1)++wakeEvents;
             if(wait==WAIT_OBJECT_0)break;if(wait==WAIT_FAILED)throw Failure(HRESULT_FROM_WIN32(GetLastError()),"Wait for desktop frame");
         }
     }
