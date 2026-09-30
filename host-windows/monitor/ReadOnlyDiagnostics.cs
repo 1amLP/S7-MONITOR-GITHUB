@@ -220,6 +220,12 @@ public static class S7ReadOnlyDiagnostics
         return Exchange(MakeCommand(kind, x, y, capture));
     }
 
+    public static byte[] SyntheticCounter(uint seconds)
+    {
+        if(seconds > 30) throw new ArgumentException("Synthetic counter limit is 30 seconds");
+        return Exchange(MakeCommand(12, 0x504d4650, (int)seconds, 0));
+    }
+
     public static byte[] PackageInfo() { return Exchange(MakeCommand(10, 0, 0, 0)); }
     public static byte[] PackageChunk(uint release, int offset, int count)
     {

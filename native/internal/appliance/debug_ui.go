@@ -15,15 +15,17 @@ import (
 )
 
 const (
-	debugCapture         = 1
-	debugOpen            = 2
-	debugClose           = 3
-	debugBack            = 4
-	debugTap             = 5
-	debugScroll          = 6
-	debugRecents         = 7
-	debugRecovery        = 8
-	debugRecoveryConfirm = 0x52564352
+	debugCapture          = 1
+	debugOpen             = 2
+	debugClose            = 3
+	debugBack             = 4
+	debugTap              = 5
+	debugScroll           = 6
+	debugRecents          = 7
+	debugRecovery         = 8
+	debugRecoveryConfirm  = 0x52564352
+	debugSyntheticCounter = 12
+	debugCounterConfirm   = 0x504d4650
 )
 
 type debugCommand struct {
@@ -75,10 +77,14 @@ func parseDebugCommand(b []byte) (debugCommand, error) {
 	}
 	c := debugCommand{Sequence: binary.LittleEndian.Uint32(b[4:]), Kind: binary.LittleEndian.Uint32(b[8:]),
 		X: int32(binary.LittleEndian.Uint32(b[12:])), Y: int32(binary.LittleEndian.Uint32(b[16:])), Capture: binary.LittleEndian.Uint32(b[20:])}
-	if c.Sequence == 0 || c.Kind < debugCapture || c.Kind > debugRecovery {
+	if c.Sequence == 0 || c.Kind < debugCapture || (c.Kind > debugRecovery && c.Kind != debugSyntheticCounter) {
 		return c, fmt.Errorf("unsupported UI command")
 	}
-	if c.Kind == debugRecovery {
+	if c.Kind == debugSyntheticCounter {
+		if c.X != debugCounterConfirm || c.Y < 0 || c.Y > 30 || c.Capture != 0 {
+			return c, fmt.Errorf("synthetic counter confirmation/duration invalid")
+		}
+	} else if c.Kind == debugRecovery {
 		if c.X != debugRecoveryConfirm || c.Y != 0 || c.Capture != 0 {
 			return c, fmt.Errorf("Recovery confirmation missing")
 		}
@@ -207,6 +213,8 @@ func (u *UI) handleDebugCommand(c debugCommand) {
 		err = fmt.Errorf("physical input active")
 	} else {
 		switch c.Kind {
+		case debugSyntheticCounter:
+			err = u.state.startSyntheticCounter(int(c.Y), time.Now())
 		case debugRecovery:
 			// Give the host a bounded window to read the acknowledgement. The UI
 			// owner then follows the existing safe shutdown/Recovery path.
@@ -263,6 +271,7 @@ func (u *UI) handleDebugCommand(c debugCommand) {
 	meta := map[string]any{"page": page, "focus": u.menuFocus, "lines": u.menuLines, "layout": u.menuLayout,
 		"gpu_probe": gpuStatus, "gpu_error": gpuError, "capture": capture, "source": "committed layer-buffer snapshot; hardware composed on demand, not panel readback"}
 	meta["recovery_requested"] = !u.debugRecoveryAt.IsZero()
+	meta["synthetic_frame_counter"] = u.state.SyntheticCounterSnapshot()
 	status := uint32(2)
 	if err != nil {
 		status = 3

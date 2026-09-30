@@ -12,6 +12,7 @@ import (
 	"perimode/native/pkg/cameraprop"
 	"perimode/native/pkg/monitor"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -68,6 +69,8 @@ type State struct {
 	cameraUSBReady, cameraUSBStreaming, cameraOwnershipFault bool
 	cameraDynamicFormat                                      bool
 	metrics                                                  MonitorMetrics
+	syntheticCounter                                         syntheticCounterProbe
+	syntheticCounterOn                                       atomic.Bool
 	Torch                                                    TorchRuntime
 	Ambient                                                  AmbientRuntime
 	Preview                                                  PreviewRuntime

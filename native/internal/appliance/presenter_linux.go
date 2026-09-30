@@ -296,6 +296,7 @@ func (q *frameMailbox) releasePixelsLocked(f *presentationFrame) {
 }
 
 func (u *UI) offerMonitorFrame(im media.Image, gen uint32) error {
+	u.state.observeSyntheticDecoded(im, gen)
 	if u.presentFrames != nil {
 		return u.presentFrames.publish(im, gen, time.Now())
 	}
@@ -321,6 +322,9 @@ func (u *UI) presentMonitorFrame(im media.Image, gen uint32) error {
 		u.state.mu.Lock()
 		defer u.state.mu.Unlock()
 		u.state.Blitted++
+		if u.state.syntheticCounterOn.Load() && !u.state.syntheticCounter.observe(im, gen, time.Now(), true) {
+			u.state.syntheticCounterOn.Store(false)
+		}
 		// A late old-generation copy must not confirm the newly reconnected host.
 		if u.state.Generation == gen && u.state.Settings.Enabled && u.state.Consumer && !u.state.ThermalPaused {
 			if im.PTS >= 0 {
