@@ -30,8 +30,9 @@ are in English. Windows application language follows Windows settings.
 ## Release Status
 
 **Experimental, device-specific source release. Not production-ready firmware.**
-The current owner-accepted baseline is r115 with Windows Monitor 0.3.33.0.
-In a controlled 720p run it submitted 59.65 unique FPS without the menu and
+The current device build is r116 with Windows Monitor 0.3.33.0. It adds
+[menu fixes](docs/MENU_R116.md) to the owner-accepted r115 presentation path.
+In the controlled r115 720p run, it submitted 59.65 unique FPS without the menu and
 59.53 with the menu. Small losses remain; this is not a guarantee of exactly
 60 physical screen updates. Windows Camera may omit 120/240 FPS options.
 Long 1440p and combined-load acceptance are still incomplete.

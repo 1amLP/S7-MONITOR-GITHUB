@@ -6,9 +6,9 @@ import (
 )
 
 type cameraControlOption struct {
-	Label    string
-	Controls fimcshot.Controls
-	Trigger  fimcshot.FocusTrigger
+	Label   string
+	Apply   func(*fimcshot.Controls)
+	Trigger fimcshot.FocusTrigger
 }
 type cameraControlField struct {
 	Name, Value      string
@@ -30,14 +30,10 @@ func cameraControlFields(r Camera3ARuntime, page string) []cameraControlField {
 		return &fields[len(fields)-1]
 	}
 	choice := func(f *cameraControlField, label string, selected bool, change func(*fimcshot.Controls)) {
-		v := c
-		if change != nil {
-			change(&v)
-		}
 		if selected {
 			f.Selected = len(f.Options)
 		}
-		f.Options = append(f.Options, cameraControlOption{Label: label, Controls: v})
+		f.Options = append(f.Options, cameraControlOption{Label: label, Apply: change})
 	}
 	switch page {
 	case "CAMERA_EXPOSURE":
@@ -53,8 +49,12 @@ func cameraControlFields(r Camera3ARuntime, page string) []cameraControlField {
 				v.Compensation = 0
 				v.AERegion = fimcshot.Region{}
 				if v.ExposureNS == 0 {
-					v.ExposureNS = max(l.ExposureMinNS, min(uint64(16666666), min(l.ExposureMaxNS, l.FrameDurationNS)))
-					v.ISO = l.ISOMin
+					preferred := c.ExposureNS
+					if preferred == 0 {
+						preferred = 16666666
+					}
+					v.ExposureNS = max(l.ExposureMinNS, min(preferred, min(l.ExposureMaxNS, l.FrameDurationNS)))
+					v.ISO = max(l.ISOMin, min(c.ISO, l.ISOMax))
 				}
 			})
 		}
@@ -109,11 +109,15 @@ func cameraControlFields(r Camera3ARuntime, page string) []cameraControlField {
 			}
 			mode := m
 			choice(f, focusName(m), m == c.Focus, func(v *fimcshot.Controls) {
+				previous := v.Focus
 				v.Focus = mode
-				v.FocusDioptres = -1
 				v.AFRegion = fimcshot.Region{}
 				if mode == fimcshot.FocusOff && l.ManualFocus {
-					v.FocusDioptres = 0
+					if previous != fimcshot.FocusOff || v.FocusDioptres < 0 {
+						v.FocusDioptres = max(float32(0), min(c.FocusDioptres, l.MaxFocusDioptres))
+					}
+				} else {
+					v.FocusDioptres = -1
 				}
 			})
 		}
@@ -124,7 +128,7 @@ func cameraControlFields(r Camera3ARuntime, page string) []cameraControlField {
 			f.Max = int(l.MaxFocusDioptres * 10)
 		} else if c.Focus != fimcshot.FocusOff {
 			f = add("AUTOFOCUS", "")
-			f.Options = []cameraControlOption{{Label: "START", Controls: c, Trigger: fimcshot.FocusStart}, {Label: "CANCEL", Controls: c, Trigger: fimcshot.FocusCancel}}
+			f.Options = []cameraControlOption{{Label: "START", Trigger: fimcshot.FocusStart}, {Label: "CANCEL", Trigger: fimcshot.FocusCancel}}
 		}
 	case "CAMERA_TONE":
 		if !l.ISPImageControls {

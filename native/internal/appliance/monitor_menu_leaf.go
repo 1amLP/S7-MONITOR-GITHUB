@@ -297,7 +297,7 @@ func (u *UI) applyMonitorLeafSlider(page string, row, value int) bool {
 }
 
 func (u *UI) setMonitorBrightness(percent int) {
-	u.async(func() error {
+	u.asyncLatest(manualBrightnessControl, func() error {
 		u.panelMu.Lock()
 		defer u.panelMu.Unlock()
 		if u.panel == nil {

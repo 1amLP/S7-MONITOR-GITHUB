@@ -3,9 +3,12 @@
 package appliance
 
 import (
+	"fmt"
 	"perimode/native/internal/camera"
 	"perimode/native/internal/camera/fimcshot"
 )
+
+const cameraResetLabel = "RESET CAMERA CONTROLS"
 
 type cameraControlService interface {
 	ControlState(camera.Settings) (camera.LiveControlState, error)
@@ -96,8 +99,55 @@ func (u *UI) camera3ALines(page string) []string {
 			}
 			lines = append(lines, line)
 		}
+	} else {
+		status := r.View.Status
+		if status == "" {
+			status = "CONTROLS UNAVAILABLE"
+		}
+		lines = append(lines, "STATUS: "+status)
+		if r.Error != "" {
+			lines = append(lines, "ERROR: "+r.Error)
+		}
+	}
+	if r.View.Descriptor.Key == camera.Key(u.state.CameraCurrent().Settings) {
+		lines = append(lines, cameraResetLabel)
 	}
 	return append(lines, "BACK: PICTURE SETTINGS")
+}
+
+func (u *UI) cameraResetRow(page string, row int) bool {
+	if !isCamera3APage(page) {
+		return false
+	}
+	lines := u.camera3ALines(page)
+	return row > 0 && row < len(lines) && lines[row] == cameraResetLabel
+}
+
+func (u *UI) resetCameraControls() {
+	settings := u.state.CameraCurrent().Settings
+	u.async(func() error {
+		u.cameraControlsMu.Lock()
+		defer u.cameraControlsMu.Unlock()
+		if camera.Key(settings) != camera.Key(u.state.CameraCurrent().Settings) {
+			return fmt.Errorf("camera mode changed")
+		}
+		service, ok := u.cameraProvider.(cameraControlService)
+		if !ok {
+			return camera.ErrControlsUnsupported
+		}
+		before, _ := service.ControlState(settings)
+		// Defaults are resolved by the provider even when the saved bank is invalid.
+		if err := service.SetControls(settings, camera.ControlSelection{}); err != nil {
+			return err
+		}
+		if err := u.refreshCamera3A(); err != nil {
+			return err
+		}
+		if before.Selection.Custom {
+			u.feedback()
+		}
+		return nil
+	})
 }
 func isCamera3APage(page string) bool {
 	return page == "CAMERA_FOCUS" || page == "CAMERA_EXPOSURE" || page == "CAMERA_WB" || page == "CAMERA_TONE"

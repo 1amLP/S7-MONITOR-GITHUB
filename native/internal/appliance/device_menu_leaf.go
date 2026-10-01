@@ -129,7 +129,7 @@ func (u *UI) deviceLeafDetail(page string, row int) (menuDetail, bool) {
 	case "DISPLAY":
 		if row == 1 {
 			_, actual := u.state.ambientCurrent()
-			return sliderDetail("BRIGHTNESS", actual, 5, 100, 5), true
+			return keyedSliderDetail(manualBrightnessControl, "BRIGHTNESS", actual, 5, 100, 5), true
 		}
 		return menuDetail{}, true
 	case "SCREEN_ROTATION":
@@ -149,11 +149,11 @@ func (u *UI) deviceLeafDetail(page string, row int) (menuDetail, bool) {
 		if a.Settings.Automatic {
 			switch row {
 			case 2:
-				return sliderDetail("MINIMUM", a.Settings.Minimum, 5, a.Settings.Maximum, 5), true
+				return keyedSliderDetail("display/auto-minimum", "MINIMUM", a.Settings.Minimum, 5, a.Settings.Maximum, 5), true
 			case 3:
-				return sliderDetail("MAXIMUM", a.Settings.Maximum, a.Settings.Minimum, 100, 5), true
+				return keyedSliderDetail("display/auto-maximum", "MAXIMUM", a.Settings.Maximum, a.Settings.Minimum, 100, 5), true
 			case 4:
-				return sliderDetail("BIAS", a.Settings.Bias, -30, 30, 5), true
+				return keyedSliderDetail("display/auto-bias", "BIAS", a.Settings.Bias, -30, 30, 5), true
 			}
 		}
 		return menuDetail{}, true
@@ -236,7 +236,7 @@ func (u *UI) selectDeviceDetail(page string, row, option int) bool {
 		return true
 	case "DISPLAY_AUTO":
 		if row == 1 {
-			u.async(func() error {
+			u.asyncLatest(autoBrightnessControl, func() error {
 				a, _ := u.state.ambientCurrent()
 				s := a.Settings
 				s.Automatic = option == 1
@@ -274,7 +274,8 @@ func (u *UI) deviceLeafSlider(page string, row, value int) bool {
 	if page != "DISPLAY_AUTO" || row < 2 || row > 4 {
 		return false
 	}
-	u.async(func() error {
+	key := map[int]string{2: "display/auto-minimum", 3: "display/auto-maximum", 4: "display/auto-bias"}[row]
+	u.asyncLatest(key, func() error {
 		a, _ := u.state.ambientCurrent()
 		s := a.Settings
 		if !s.Automatic {

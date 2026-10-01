@@ -23,6 +23,10 @@ and digital zoom worked on the tested S7 after the earlier fixes. Preview shows
 the camera locally. Taps in fullscreen Preview control focus, not the mouse.
 The camera activity LED turns off when capture stops.
 
+Focus, Exposure, White Balance and Image Settings include **RESET CAMERA CONTROLS**.
+Choose **RESET FOR THIS MODE** to restore that sensor/video-mode control bank.
+It does not reset resolution, FPS, bitrate or zoom and does not restart USB.
+
 High-speed 120/240 FPS profiles are not accepted as universal end-to-end modes.
 They may be absent from Windows Camera even when another client exposes them.
 Do not advertise all modes as lossless or stable without measuring the full path.

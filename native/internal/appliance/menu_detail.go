@@ -8,6 +8,7 @@ import (
 )
 
 type menuDetail struct {
+	ControlKey                       string
 	Title, Hint                      string
 	Options                          []string
 	Selected                         int

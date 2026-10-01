@@ -58,6 +58,7 @@ type UI struct {
 	debug                               *debugUI
 	debugRecoveryAt                     time.Time
 	inputTiming                         inputTiming
+	controls                            controlQueue
 	labMode                             bool
 	usbTrialFPS                         uint32
 	codecSelection                      mediacodec.Selection
@@ -80,6 +81,8 @@ type UI struct {
 	menuFocus                           int
 	menuSlider                          int
 	menuLayout                          fb.GlassLayout
+	menuPaintStatus                     fb.MenuStatus
+	menuPaintPage                       string
 	menuLines                           []string
 	menuTapBounds                       [4]int
 	menuTapLabel                        string
@@ -305,7 +308,8 @@ func (u *UI) draw() {
 		return
 	}
 	u.menuNeedsDraw = false
-	if _, _, page := u.state.Current(); page == "" {
+	_, _, page := u.state.Current()
+	if page == "" {
 		return
 	}
 	u.presentationMu.Lock()
@@ -315,7 +319,11 @@ func (u *UI) draw() {
 		u.screen.SetVideoGeneration(gen)
 		lines := u.lines()
 		if len(lines) > 0 {
-			u.state.Error(u.screen.SetMenuStatus(u.currentMenuStatus()))
+			status := u.currentMenuStatus()
+			if err := u.screen.SetMenuStatus(status); err != nil {
+				u.state.Error(err)
+				return
+			}
 			var source *media.Image
 			if u.presentFrames != nil {
 				if latest, ok := u.presentFrames.snapshotLatest(gen); ok {
@@ -325,6 +333,7 @@ func (u *UI) draw() {
 			layout, err := u.screen.GlassMenuSource(lines, u.menuScroll, source)
 			u.state.Error(err)
 			if err == nil {
+				u.menuPaintStatus, u.menuPaintPage = status, page
 				u.menuScroll = layout.Scroll
 				u.menuLayout = layout
 				u.menuLines = append(u.menuLines[:0], lines...)
@@ -1099,15 +1108,7 @@ func (u *UI) key(k uint16) bool {
 
 // async serializes control-plane writes without blocking input or thermal guards.
 func (u *UI) async(fn func() error) {
-	if u.ops == nil {
-		u.state.Error(fmt.Errorf("control worker unavailable"))
-		return
-	}
-	select {
-	case u.ops <- fn:
-	default:
-		u.state.Error(fmt.Errorf("control operation already pending"))
-	}
+	u.enqueueControl("", fn)
 }
 func (u *UI) savePreferences(force bool) error {
 	// Engineering BOOT cannot replace ordinary saved camera or other preferences.
@@ -1153,8 +1154,12 @@ func (u *UI) controlWorker(ctx context.Context, health *safety.Liveness) {
 			u.writeFault(ev)
 			health.EndOperation()
 		case fn := <-u.ops:
+			if ctx.Err() != nil {
+				return
+			}
 			health.BeginOperation()
 			u.state.Error(fn())
+			u.pumpControls()
 			select {
 			case u.opsDone <- struct{}{}:
 			default:
@@ -1374,6 +1379,7 @@ func RunNative(parent context.Context, health *safety.Liveness) error {
 			report["touch_timing"] = touch.touchTiming()
 		}
 		report["input_timing"] = u.inputTiming.snapshot()
+		report["control_queue"] = u.controls.snapshot()
 		b, e := json.Marshal(report)
 		if e != nil {
 			return []byte(`{"error":"marshal"}`)

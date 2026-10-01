@@ -172,6 +172,9 @@ func (u *UI) cameraHUDInput(x, y uint16, drag bool) bool {
 			return true
 		}
 		if v.Slider && point.In(g.Slider) {
+			if !c.field.Slider || c.field.Min != v.Min || c.field.Max != v.Max {
+				return true
+			}
 			value := v.Min + (g.Slider.Max.Y-1-point.Y)*(v.Max-v.Min)/max(1, g.Slider.Dy()-1)
 			u.cameraHUDDragging = true
 			if value != u.cameraHUDLastValue {
@@ -189,6 +192,9 @@ func (u *UI) cameraHUDInput(x, y uint16, drag bool) bool {
 						s.Image.ZoomPercent = uint16([]int{100, 150, 200, 300, 400}[i])
 						u.state.Error(u.configureCamera(s))
 					} else {
+						if i >= len(c.field.Options) || c.field.Options[i].Label != v.Options[i] {
+							return true
+						}
 						u.selectCameraControlDetail(c.page, c.row, i)
 					}
 					u.cameraHUDSelection = ""

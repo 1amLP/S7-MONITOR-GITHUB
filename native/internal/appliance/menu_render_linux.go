@@ -129,6 +129,7 @@ func (u *UI) acceptMenuPaint(result menuPaintResult) {
 	}
 	u.paintAcceptedRevision = result.request.revision
 	if page != "" {
+		u.menuPaintStatus, u.menuPaintPage = result.request.status, page
 		u.cameraHUDVisible = false
 		// Hit testing follows the frame actually committed, even while a newer
 		// scroll is rendering. Do not roll back the newest desired scroll offset.

@@ -1,6 +1,7 @@
 # Current Status
 
-**r115 is an owner-accepted engineering baseline, not a production release.**
+**r116 is the current device build, not a production release.**
+It retains the r115 presentation path and adds [verified menu fixes](MENU_R116.md).
 The [current audit](AUDIT_R115.md) separates file hygiene, build success and
 hardware acceptance. Six native test packages still fail. Targeted passing tests
 must not be described as a complete regression pass.
@@ -37,13 +38,18 @@ must not be described as a complete regression pass.
   candidate was not signed, installed or flashed.
 - Firmware menus and component source strings are English. Windows application
   dialogs use the operating system's language.
+- r116 preserves final queued menu settings and adds a current-mode camera-control
+  reset. The owner confirmed stable brightness selection and the English Reset
+  entry. Unit/race tests cover invalid saved banks without opening a sensor or
+  changing USB; the working phone was not given intentionally invalid settings.
 
 ## Not Yet Accepted
 
 - A maintained Go toolchain and documented ongoing security maintenance for
   the vendor Linux 3.18 kernel. Reproducing the old binary is not that validation.
-- Full native regression suite: six failing packages, including stale checks and
-  a saved-camera-control recovery defect. The source publication excludes the
+- Full native regression suite: six failing packages in the audit baseline,
+  including stale checks. The camera-control recovery path was fixed in r116,
+  but the wider suite still fails. The source publication excludes the
   engineering test fixtures; `-SkipTests` does not make the release tested.
 - Complete signing/install/update/rollback workflow of the serial-parameterized
   sanitized source on another PC or handset.

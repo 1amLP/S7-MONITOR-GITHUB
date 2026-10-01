@@ -21,6 +21,12 @@ func sliderDetail(title string, value, low, high, step int) menuDetail {
 	return menuDetail{Title: title, Slider: true, SliderValue: value, SliderMin: low, SliderMax: high, SliderStep: step}
 }
 
+func keyedSliderDetail(key, title string, value, low, high, step int) menuDetail {
+	d := sliderDetail(title, value, low, high, step)
+	d.ControlKey = key
+	return d
+}
+
 func choicesDetail(title string, options []string, selected int) menuDetail {
 	return menuDetail{Title: title, Options: options, Selected: selected, HasSelected: selected >= 0 && selected < len(options), Action: true}
 }
@@ -308,13 +314,20 @@ func (u *UI) selectFunctionDetail(page string, row, option int) bool {
 }
 
 func (u *UI) cameraControlDetail(page string, row int, label, value string) (menuDetail, bool) {
-	fields := cameraControlFields(u.state.Camera3ACurrent(), page)
+	if label == cameraResetLabel && u.cameraResetRow(page, row) {
+		return choicesDetail(cameraResetLabel, []string{"RESET FOR THIS MODE"}, -1), true
+	}
+	r := u.state.Camera3ACurrent()
+	if !r.Ready || r.View.Descriptor.Key != camera.Key(u.state.CameraCurrent().Settings) {
+		return informationDetail(label, value), true
+	}
+	fields := cameraControlFields(r, page)
 	if row <= 0 || row > len(fields) {
-		return informationDetail(label, ""), true
+		return informationDetail(label, value), true
 	}
 	f := fields[row-1]
 	if f.Slider {
-		d := sliderDetail(f.Name, f.Number, f.Min, f.Max, 1)
+		d := keyedSliderDetail(cameraControlKey(page, f.Name), f.Name, f.Number, f.Min, f.Max, 1)
 		d.SliderText = f.Value
 		return d, true
 	}
@@ -328,9 +341,11 @@ func (u *UI) cameraControlDetail(page string, row int, label, value string) (men
 	return choicesDetail(f.Name, labels, f.Selected), true
 }
 
-func (u *UI) submitCameraControl(base, c fimcshot.Controls, trigger fimcshot.FocusTrigger) {
+func cameraControlKey(page, name string) string { return "camera/" + page + "/" + name }
+
+func (u *UI) submitCameraControl(key string, apply func(*fimcshot.Controls), trigger fimcshot.FocusTrigger) {
 	settings := u.state.CameraCurrent().Settings
-	u.async(func() error {
+	fn := func() error {
 		u.cameraControlsMu.Lock()
 		defer u.cameraControlsMu.Unlock()
 		if camera.Key(settings) != camera.Key(u.state.CameraCurrent().Settings) {
@@ -347,7 +362,11 @@ func (u *UI) submitCameraControl(base, c fimcshot.Controls, trigger fimcshot.Foc
 		if trigger != fimcshot.FocusIdle {
 			err = service.TriggerFocus(settings, trigger)
 		} else {
-			next := fimcshot.MergeControls(base, c, view.Effective)
+			if apply == nil {
+				return fmt.Errorf("camera control update missing")
+			}
+			next := view.Effective
+			apply(&next)
 			if next == view.Effective {
 				return u.refreshCamera3A()
 			}
@@ -361,10 +380,22 @@ func (u *UI) submitCameraControl(base, c fimcshot.Controls, trigger fimcshot.Foc
 			u.feedback()
 		}
 		return err
-	})
+	}
+	if trigger != fimcshot.FocusIdle {
+		u.async(fn)
+	} else {
+		u.asyncLatest(key, fn)
+	}
 }
 
 func (u *UI) selectCameraControlDetail(page string, row, option int) bool {
+	if u.cameraResetRow(page, row) {
+		if option != 0 {
+			return false
+		}
+		u.resetCameraControls()
+		return true
+	}
 	r := u.state.Camera3ACurrent()
 	if !r.Ready || r.View.Descriptor.Key != camera.Key(u.state.CameraCurrent().Settings) {
 		return false
@@ -374,7 +405,8 @@ func (u *UI) selectCameraControlDetail(page string, row, option int) bool {
 		return false
 	}
 	value := fields[row-1].Options[option]
-	u.submitCameraControl(r.View.Effective, value.Controls, value.Trigger)
+	key := cameraControlKey(page, fields[row-1].Name)
+	u.submitCameraControl(key, value.Apply, value.Trigger)
 	return true
 }
 
@@ -394,26 +426,26 @@ func (u *UI) cameraControlSlider(page string, row, value int) bool {
 	if !f.Slider || value < f.Min || value > f.Max {
 		return true
 	}
-	c := r.View.Effective
+	var apply func(*fimcshot.Controls)
 	switch f.Name {
 	case "BRIGHTNESS":
-		c.Brightness = int32(value)
+		apply = func(c *fimcshot.Controls) { c.Brightness = int32(value) }
 	case "CONTRAST":
-		c.Contrast = uint32(value)
+		apply = func(c *fimcshot.Controls) { c.Contrast = uint32(value) }
 	case "GAMMA":
-		c.Gamma = uint32(value)
+		apply = func(c *fimcshot.Controls) { c.Gamma = uint32(value) }
 	case "SHARPNESS":
-		c.Sharpness = uint32(value)
+		apply = func(c *fimcshot.Controls) { c.Sharpness = uint32(value) }
 	case "TEMPERATURE":
-		c.WBTemperature = uint32(value * 100)
+		apply = func(c *fimcshot.Controls) { c.WBTemperature = uint32(value * 100) }
 	case "DISTANCE":
-		c.FocusDioptres = float32(value) / 10
+		apply = func(c *fimcshot.Controls) { c.FocusDioptres = float32(value) / 10 }
 	case "EXPOSURE COMPENSATION":
-		c.Compensation = int32(value)
+		apply = func(c *fimcshot.Controls) { c.Compensation = int32(value) }
 	default:
 		return true
 	}
-	u.submitCameraControl(r.View.Effective, c, fimcshot.FocusIdle)
+	u.submitCameraControl(cameraControlKey(page, f.Name), apply, fimcshot.FocusIdle)
 	return true
 }
 
@@ -424,7 +456,23 @@ func (u *UI) applyDetailSlider(value int) {
 	if hi == 0 {
 		lo, hi, step = 50, 200, 5
 	}
-	if !d.Slider || value < lo || value > hi || (value-lo)%step != 0 || value == d.SliderValue {
+	if !d.Slider || value < lo || value > hi || (value-lo)%step != 0 {
+		return
+	}
+	pending := u.controls.pending(d.ControlKey)
+	if d.ControlKey == manualBrightnessControl {
+		a, _ := u.state.ambientCurrent()
+		pending = pending || a.Settings.Automatic || u.controls.pending(autoBrightnessControl)
+	}
+	if value == d.SliderValue && strings.HasPrefix(d.ControlKey, "camera/") {
+		if u.cameraControlsMu.TryLock() {
+			u.cameraControlsMu.Unlock()
+		} else {
+			// A PC control update may not have published its UI snapshot yet.
+			pending = true
+		}
+	}
+	if value == d.SliderValue && !pending {
 		return
 	}
 	defer func() {

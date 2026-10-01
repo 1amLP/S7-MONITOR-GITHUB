@@ -8,6 +8,12 @@ Baseline: r115, Windows Monitor 0.3.33.0, package 2026093008, source `d176bdb`.
 The owner accepted the current FPS result. This audit did not replace firmware,
 drivers, signing certificates or camera settings on the working device.
 
+**Follow-up:** after the audit, the owner authorized [r116 menu fixes](MENU_R116.md).
+The control-queue and invalid-camera-bank findings below describe the pre-fix r115
+baseline; those two paths now have fixes and targeted verification. r116 was
+installed without changing the Windows package. The remaining release gates and
+the not-production-ready verdict still apply.
+
 ## Ratings
 
 These are engineering judgments, not certified or statistically calibrated scores.
@@ -72,22 +78,23 @@ kernel build must be provided legally and matched correctly. A public ready-made
 release must resolve input provenance, signing and supported-device policy.
 This audit does not grant permission to redistribute Samsung binaries.
 
-### P2: A busy control queue can reject the final action
+### P2, fixed in r116: A busy control queue could reject the final action
 
-[UI.async](../native/internal/appliance/run_linux.go#L1101) performs a nonblocking
-send and reports `control operation already pending` on overflow. The source
-still has the behavior identified in r103. Camera parameter edits use this path.
-Under contention, the user's last requested slider value may not be applied.
-The current snapshot did not show this error; the reachable failure path remains.
+In the r115 baseline, `UI.async` performed a nonblocking send and reported
+`control operation already pending` on overflow. Camera parameter edits used
+this path. Under contention, the user's last requested value could be lost.
+The error was subsequently observed on the working r115 phone before replacement.
+The [r116 queue](../native/internal/appliance/control_queue_linux.go) coalesces
+named settings separately from one-shot commands. See [verification](MENU_R116.md).
 
-### P2: Invalid saved camera controls still lack a menu reset
+### P2, fixed in r116: Invalid saved camera controls lacked a menu reset
 
-[camera3ALines](../native/internal/appliance/camera_3a_linux.go#L87) emits control
-rows only when the sensor-specific bank is valid. Otherwise it offers Back,
-without the reset expected by the recovery test. A generic-valid saved selection
-can violate a sensor limit and prevent camera startup. This is a recovery defect,
-separate from the stale test's indexing panic. Normal camera use on the current
-saved settings does not prove this path is safe.
+In r115, `camera3ALines` emitted control rows only when the sensor-specific bank
+was valid. Otherwise it offered Back without a reset. A generic-valid saved
+selection could violate a sensor limit and prevent camera startup. This recovery
+defect was separate from the stale test's indexing panic. The current
+[camera controls](../native/internal/appliance/camera_3a_linux.go) include a
+sensor/mode-specific reset, covered by [r116 checks](MENU_R116.md).
 
 ### P2: Timing and hardware acceptance remain incomplete
 
@@ -134,8 +141,9 @@ new UAC signing cycle or phone reflash was performed during this audit.
 
 ## Minimum Release Gates
 
-1. Repair current-contract regression tests and the confirmed control/recovery
-   defects; obtain an honest green suite without hiding unsupported cases.
+1. Repair current-contract regression tests and any remaining confirmed defects;
+   obtain an honest green suite without hiding unsupported cases. The two menu
+   defects above are fixed, but the final r116 run still has six failing packages.
    Validate a maintained compiler and document the vendor-kernel maintenance policy.
 2. Freeze the supported model, BOOT/Recovery/kernel inputs, USB protocol and
    signing identity. Produce one versioned, internally consistent package.

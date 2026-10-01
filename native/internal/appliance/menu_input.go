@@ -43,11 +43,22 @@ func (u *UI) menuInput(contacts []hid.Contact) {
 			u.menuScrollGesture = image.Pt(int(c.X)*(w-1)/32767, int(c.Y)*(h-1)/32767).In(l.Body)
 			u.menuTapBounds, u.menuTapLabel = menuTarget(l, lines, hit)
 			if value, ok := l.SliderValue(hit, w, h, c.X, c.Y); ok {
+				if !u.renderedDetailCurrent() {
+					u.menuDragged, u.touchRow = true, -1
+					u.draw()
+					return
+				}
 				u.menuSlider = hit
 				u.menuDragged = true
 				u.applyDetailSlider(value)
 			}
 		} else if u.menuSlider > 0 {
+			if !u.renderedDetailCurrent() {
+				u.menuSlider, u.touchRow = 0, -1
+				u.menuDragged = true
+				u.draw()
+				return
+			}
 			if value, ok := l.SliderValue(u.menuSlider, w, h, c.X, c.Y); ok {
 				u.applyDetailSlider(value)
 			}
@@ -112,6 +123,11 @@ func (u *UI) menuInput(contacts []hid.Contact) {
 		}
 		// Feedback follows a real action, not the initial contact or a cancelled tap.
 		_, _, oldPage := u.state.Current()
+		if row >= fb.GlassDetailBase && !u.renderedDetailCurrent() {
+			u.inputTiming.menuTapCancelled(false, false)
+			u.draw()
+			return
+		}
 		if row >= fb.GlassDetailBase && !u.menuDetail(oldPage, u.menuFocus).Action {
 			return
 		}
@@ -151,6 +167,32 @@ func (u *UI) menuInput(contacts []hid.Contact) {
 			u.middleSelection(row)
 		}
 	}
+}
+
+// A worker can change the control list before its new frame is painted. Do not
+// reinterpret an old Reset button or slider as the new control at the same index.
+func (u *UI) renderedDetailCurrent() bool {
+	_, _, page := u.state.Current()
+	p := u.menuPaintStatus
+	if page != u.menuPaintPage || p.Focused != u.menuFocus {
+		return false
+	}
+	d := u.menuDetail(page, u.menuFocus)
+	if p.DetailTitle != d.Title || p.DetailAction != d.Action || p.DetailSlider != d.Slider {
+		return false
+	}
+	if d.Slider {
+		lo, hi, step := d.SliderMin, d.SliderMax, d.SliderStep
+		if hi == 0 {
+			lo, hi, step = 50, 200, 5
+		}
+		return p.DetailSliderMin == lo && p.DetailSliderMax == hi && p.DetailSliderStep == step
+	}
+	count := min(len(d.Options), len(p.DetailOptions))
+	if p.DetailCount != count {
+		return false
+	}
+	return slices.Equal(p.DetailOptions[:count], d.Options[:count])
 }
 
 const menuHoldDelay = 650 * time.Millisecond
