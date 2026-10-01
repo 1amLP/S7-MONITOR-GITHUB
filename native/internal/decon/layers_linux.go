@@ -141,8 +141,14 @@ func (p *Presenter) presentViewWith(video media.Image, rotation int, menu, previ
 		}
 	}
 	old := p.video.Lease
+	// Telemetry can swap an immutable menu slot together with a new video frame.
+	// Menu writers call WaitMenuReusable before touching an inactive slot.
+	previousMenu := p.menuLayer
+	if old != video.Lease && menu.Enabled && previousMenu.Enabled {
+		previousMenu.FD = menu.FD
+	}
 	fast := (p.device != nil || p.submitConfigTest != nil) && p.stats.HardwareLayers && old != nil && video.Lease != nil && camera == nil && p.cameraView == nil &&
-		!menu.Enabled && !preview.Enabled && !p.menuLayer.Enabled && !p.previewLayer.Enabled && p.retireFD >= 0
+		menu == previousMenu && rotation == p.layerRotation && !preview.Enabled && !p.previewLayer.Enabled && p.retireFD >= 0
 	if fast {
 		err = p.presentVideoFast(config, old)
 	} else {

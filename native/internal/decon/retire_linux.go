@@ -17,6 +17,7 @@ type retiredVideo struct {
 	fence     int
 	lease     *media.FrameLease
 	submitted time.Time
+	menuFD    int
 }
 
 // The previous frame remains pinned until DECON retires it. Two records keep
@@ -91,6 +92,29 @@ func (p *Presenter) makeRoomForRetire() error {
 	return nil
 }
 
+// Menu storage is double buffered independently of the video leases. A retired
+// configuration may still read the inactive menu slot after an atomic swap.
+func (p *Presenter) WaitMenuReusable(fd int) error {
+	if p == nil || p.closed || p.poisoned || fd < 0 {
+		return fmt.Errorf("DECON menu storage unavailable")
+	}
+	if p.menuLayer.Enabled && p.menuLayer.FD == fd {
+		return fmt.Errorf("DECON current menu buffer is immutable")
+	}
+	for {
+		pending := false
+		for _, r := range p.retired {
+			pending = pending || r.menuFD == fd
+		}
+		if !pending {
+			return nil
+		}
+		if _, err := p.retireOldest(true); err != nil {
+			return p.fail(err)
+		}
+	}
+}
+
 func (p *Presenter) presentVideoFast(config winConfigData, old *media.FrameLease) error {
 	if err := p.makeRoomForRetire(); err != nil {
 		return p.fail(err)
@@ -103,7 +127,11 @@ func (p *Presenter) presentVideoFast(config winConfigData, old *media.FrameLease
 	}
 	previous := p.retireFD
 	p.retireFD, p.lastSubmit = fence, started
-	p.retired = append(p.retired, retiredVideo{fence: previous, lease: old, submitted: previousAt})
+	menuFD := -1
+	if p.menuLayer.Enabled {
+		menuFD = p.menuLayer.FD
+	}
+	p.retired = append(p.retired, retiredVideo{fence: previous, lease: old, submitted: previousAt, menuFD: menuFD})
 	p.stats.PendingRetires = len(p.retired)
 	p.stats.LastPaceUS = 0
 	p.stats.Active = true

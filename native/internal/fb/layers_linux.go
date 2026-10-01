@@ -71,6 +71,7 @@ func (b *Buffer) commitLayersLocked(next *media.Image) error {
 		b.hardwareGlassError = err.Error()
 		return err
 	}
+	b.layerMenuPending = false
 	b.publishInputGeometry()
 	return nil
 }

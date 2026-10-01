@@ -227,6 +227,9 @@ func (b *Buffer) RenderCameraHUD(v *CameraHUD) error {
 	if active.Enabled && active.FD == b.menuGPU.MenuFD(0) {
 		slot = 1
 	}
+	if err := b.scanout.WaitMenuReusable(b.menuGPU.MenuFD(slot)); err != nil {
+		return err
+	}
 	fd, err := b.menuGPU.RenderSlot(int(b.Rotation), b.Width, b.Height, d.commands, slot)
 	if err != nil {
 		return err

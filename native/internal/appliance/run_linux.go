@@ -1347,6 +1347,9 @@ func RunNative(parent context.Context, health *safety.Liveness) error {
 		report["native_messages"] = RuntimeMessages()
 		report["frame_rate"] = s.FrameRate()
 		report["synthetic_frame_counter"] = s.SyntheticCounterSnapshot()
+		if s.syntheticCounterOn.Load() {
+			report["panel_interrupts"] = panelInterruptSnapshot()
+		}
 		report["windows_endpoints"] = s.EndpointSnapshot()
 		report["last_driver_failure"] = s.HostFailureSnapshot()
 		report["power_policy"] = s.PowerSnapshot()

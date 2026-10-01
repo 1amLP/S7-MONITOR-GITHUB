@@ -57,6 +57,7 @@ type Buffer struct {
 	glass                              *glassScene
 	menuComposer                       menuFrameComposer
 	layerMenuFD                        int
+	layerMenuPending                   bool
 	layerMenuRect                      image.Rectangle
 	cameraHUD                          *CameraHUD
 	bootOrbit                          bool

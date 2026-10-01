@@ -81,6 +81,9 @@ func (b *Buffer) RenderBootOrbit(elapsed time.Duration) (bool, error) {
 	if active.Enabled && active.FD == b.menuGPU.MenuFD(0) {
 		slot = 1
 	}
+	if err = b.scanout.WaitMenuReusable(b.menuGPU.MenuFD(slot)); err != nil {
+		return false, err
+	}
 	fd, err := b.menuGPU.RenderSlot(int(b.Rotation), b.Width, b.Height, commands, slot)
 	if err != nil {
 		return false, err
