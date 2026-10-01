@@ -16,8 +16,7 @@ import (
 // FIFO look fresh. Pinned kernel get_current_timestamp and posix_get_boottime
 // both use ktime_get_with_offset(1); report_iio_data forwards the sensor timestamp.
 // Actual MCU synchronization/received samples still need device validation.
-// See reports/delivery-sensor-cancel-frame-path/SSP_CLOCK_BINARY_EVIDENCE.json.
-// The packed record layout is unchanged. See SENSOR_FRESHNESS_RU.md.
+// The packed record layout is unchanged; this code only maps its clock domain.
 type ClockPoint struct {
 	BootNS uint64
 	Host   time.Time

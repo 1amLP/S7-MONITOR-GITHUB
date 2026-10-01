@@ -47,7 +47,7 @@ func (c EncodeSettings) Validate() error {
 }
 
 // V4L2 enum values; choose a High-profile level by coded macroblock extent,
-// processing rate and bitrate, not width alone. See CAMERA_MATRIX_RU.md.
+// processing rate and bitrate, not width alone.
 func (c EncodeSettings) Level() int32 {
 	blocks := uint64((c.Width+15)/16) * uint64((c.Height+15)/16)
 	rate := blocks * uint64(c.FPS)

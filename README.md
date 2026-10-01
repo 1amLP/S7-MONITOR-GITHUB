@@ -1,58 +1,67 @@
 # PeriMode
 
-**Один старый смартфон. Несколько полезных периферийных устройств.**
+**One old phone. Your everyday peripherals, together.**
 
-PeriMode даёт старому телефону новую работу через USB: дополнительный монитор,
-веб-камеру, динамик, микрофон и сенсорное устройство ввода. В режиме Sniper
-экран телефона показывает выбранную область основного монитора и принимает
-касания по этой области. Идея проекта — использовать исправные телефоны дольше,
-а не отправлять их в ящик или на свалку.
+PeriMode turns an old smartphone into a USB monitor, webcam, speaker,
+microphone and touch surface. Sniper mode brings a selected part of your main
+display onto the phone, with touch input, zoom, pan, rotation and mirroring.
+The goal is simple: keep useful phones working instead of throwing them away.
 
-Это исходники для **Samsung Galaxy S7 SM-G930F (herolte, Exynos 8890)**.
-На одном устройстве проверены Monitor, обе веб-камеры, звук и Sniper Touch.
-Другие телефоны, включая S7 edge и Snapdragon-варианты, **не проверены** и
-не поддерживаются готовой прошивкой. Перенос потребует своих драйверов ядра,
-USB, дисплея, камер и профилей питания.
+This source tree targets **Samsung Galaxy S7 SM-G930F (herolte, Exynos 8890)**.
+Monitor, both cameras, audio and Sniper Touch have been used on one real device.
+Other phones, including S7 edge and Snapdragon variants, are **not supported
+by this firmware**. Supporting them requires device-specific kernel, USB,
+display, camera and power work. Reuse the architecture, not the S7 BOOT image.
 
-## Режимы
+## Modes
 
-| Режим | Что делает |
+| Mode | Purpose |
 | --- | --- |
-| Monitor | Дополнительный USB-дисплей Windows, 720p или 1440p |
-| Camera | Передняя и задняя камеры как источники Windows |
-| Preview | Просмотр камеры на экране телефона |
-| Audio | Динамик и микрофон, включаемые отдельно |
-| Touch / Pad | Сенсорный ввод или тачпад для Windows |
-| Sniper | Увеличенная область основного экрана, жесты и аппаратный HID Touch |
+| Monitor | A 720p or 1440p USB display for Windows |
+| Camera | Front and rear camera sources for Windows applications |
+| Preview | A local camera preview on the phone |
+| Audio | Independently enabled speaker and microphone |
+| Touch / Pad | Direct touch input or a touchpad for Windows |
+| Sniper | A movable, zoomable region of the main display with hardware HID Touch |
 
-Управление режимами описано в [MODES_RU.md](docs/MODES_RU.md).
+See [Modes and controls](docs/MODES.md). Firmware menus and project documentation
+are in English. Windows application language follows Windows settings.
 
-## Честный статус
+## Release Status
 
-Это **подготовленный к публикации исходный код, а не готовый универсальный
-установочный релиз**. На проверенном S7 в 720p устранены наблюдавшиеся
-провалы до 40–50 FPS: два длинных теста прошли около 60 FPS. Метки в готовых
-кадрах подтвердили 59,94–60,01 уникальных FPS после декодирования и
-59,65–59,70 на запросах вывода. Это не измерение физической частоты матрицы.
-Windows Camera не показывает 120/240 FPS, хотя высокоскоростные профили
-исследуются отдельно. Последняя правка вывода ещё не проверена на 1440p.
-В r115 обновление цифр меню объединено с видео: измерено 59,53 уникальных
-FPS с открытым меню против прежних 57,64. [Замеры и ограничения](docs/PERFORMANCE_R115_RU.md).
-Текущие ограничения перечислены в [STATUS_RU.md](docs/STATUS_RU.md).
+**Experimental, device-specific source release. Not production-ready firmware.**
+The current owner-accepted baseline is r115 with Windows Monitor 0.3.33.0.
+In a controlled 720p run it submitted 59.65 unique FPS without the menu and
+59.53 with the menu. Small losses remain; this is not a guarantee of exactly
+60 physical screen updates. Windows Camera may omit 120/240 FPS options.
+Long 1440p and combined-load acceptance are still incomplete.
 
-Репозиторий не содержит BOOT, vendor-библиотек, серийного номера устройства,
-сертификатов, подписанных драйверов, тестовых бинарников и журналов.
-Сборка требует законно полученных файлов **с собственного совместимого S7**.
-Порядок и проверки: [BUILD_INSTALL_RU.md](docs/BUILD_INSTALL_RU.md).
+The release audit found six failing native test packages. The sanitized source
+builds, but its complete signing, installation and upgrade cycle has not been
+validated on another device. See the [release audit](docs/AUDIT_R115.md),
+[current status](docs/STATUS.md) and [measured results](docs/PERFORMANCE_R115.md).
 
-## Совместимость и права
+No BOOT images, vendor libraries, private device serials, certificates, signed
+drivers, test binaries or diagnostic logs belong in this repository.
+Building requires legally obtained files from **your own compatible S7**.
+Read [Build and installation](docs/BUILD_INSTALL.md) before attempting a build.
 
-- Проверенная модель и ограничения переноса: [COMPATIBILITY_RU.md](docs/COMPATIBILITY_RU.md).
-- Исходный код распространяется по GPL-3.0; сторонние компоненты не
-  перелицензируются: [PROVENANCE.md](docs/PROVENANCE.md).
-- Исходный Go-модуль имеет локальный путь `perimode/native`; он не зависит от
-  имени аккаунта GitHub.
+Check the source tree before publication:
 
-**Описание для GitHub:** PeriMode превращает старый смартфон в монитор,
-веб-камеру, аудиоустройство и сенсорную панель через USB. Проверено на
-Samsung Galaxy S7 SM-G930F; цель — дать старым телефонам вторую жизнь.
+```sh
+python3 tools/audit_source_tree.py --history
+```
+
+This checks file hygiene, English text, local links and common private-data
+patterns. It does not replace tests, firmware acceptance or a security review.
+
+## Compatibility and Licensing
+
+- Tested hardware and porting limits: [Compatibility](docs/COMPATIBILITY.md).
+- Project source is GPL-3.0. Third-party components retain their own terms:
+  [Provenance](docs/PROVENANCE.md).
+- The Go module uses `perimode/native`; it does not depend on a GitHub username.
+
+**GitHub description:** Give an old phone a new role: USB monitor, webcam,
+audio and touch in one device. Experimental support for Samsung Galaxy S7
+SM-G930F, built as a foundation for keeping older phones useful.

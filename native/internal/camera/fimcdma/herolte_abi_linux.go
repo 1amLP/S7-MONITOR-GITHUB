@@ -11,8 +11,7 @@ import (
 // Herolte481ABI names the camera ABI shared by the verified 481 and e418 builds,
 // not the whole kernel or its USB lifecycle. It is not a general V4L2 mode.
 // The owner verifies an exact release and sysfs/dev_t before opening nodes.
-// See hardware/source-config/camera-kernel-abi-evidence.json for source/config
-// identity and CAMERA_PROFILES_RU.md for the QUERYCAP/G_FMT callbacks.
+// The QUERYCAP/G_FMT exceptions below depend on that verified node identity.
 const Herolte481ABI = "herolte-3.18.140-481bdb278a10"
 
 func ValidateKernelABI(abi string) error {

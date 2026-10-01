@@ -6,6 +6,8 @@
 /captures/
 /screenshots/
 /images/
+/artifacts/
+/local/
 /native/build/
 /hardware/firmware/
 /hardware/fonts/
@@ -65,6 +67,11 @@ bundle.p7s
 *.etl
 *.dmp
 *.trace
+*.vhd
+*.vhdx
+*.cpio
+*.cpio.xz
+*.test
 *.log
 *.pyc
 
